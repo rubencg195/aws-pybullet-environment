@@ -1,12 +1,10 @@
 resource "aws_instance" "this" {
-  ami                    = data.aws_ami.amazon_linux_2023.id
-  instance_type          = var.instance_type
-  key_name               = var.key_name
-  subnet_id              = local.subnet_id
+  ami                         = data.aws_ami.amazon_linux_2023.id
+  instance_type               = var.instance_type
+  key_name                    = var.key_name
+  subnet_id                   = local.subnet_id
 
-  # Match the subnet: public subnets get a public IP so the SSM agent can reach AWS
-  # (set local.ec2_subnet_id to a public subnet, or add NAT/SSM VPC endpoints in private-only VPCs)
-  associate_public_ip_address = data.aws_subnet.selected.map_public_ip_on_launch
+  associate_public_ip_address = true
 
   vpc_security_group_ids = [aws_security_group.this.id]
   iam_instance_profile   = aws_iam_instance_profile.this.name
@@ -23,6 +21,13 @@ resource "aws_instance" "this" {
 
   metadata_options {
     http_tokens = "required"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.subnet_id != null
+      error_message = "No subnet resolved: set local.ec2_subnet_id or add a VPC subnet whose Name matches *public* (see data.aws_subnets.filtered in the ec2-instance module)."
+    }
   }
 
   tags = merge(

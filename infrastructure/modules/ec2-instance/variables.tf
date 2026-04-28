@@ -23,7 +23,7 @@ variable "key_name" {
 variable "subnet_id" {
   type        = string
   default     = null
-  description = "Subnet for the instance. If null, the first default-VPC subnet is used."
+  description = "Subnet id for the instance. If null, first sorted id among subnets in vpc_id with tag:Name matching *public*."
 }
 
 variable "sg_ingress_cidrs" {

@@ -2,7 +2,7 @@
 
 Infrastructure and tooling to run **PyBullet** physics simulation in **Amazon Web Services (AWS)**, so robotics and simulation work can be performed **remotely** from a **low-specification or portable client** (for example, a small laptop on Wi‑Fi) while the **GPU and CPU work** run on a **dedicated host in the cloud**. The goal is to separate **where you work** from **where the simulation runs**: a graphical desktop, DCV, and the PyBullet environment live on **EC2**; the client only needs a **browser** or the **NICE DCV** / **SSM** tooling.
 
-**What is deployed today** (see `infrastructure/`): a **GPU** EC2 instance (default type **`g4dn.2xlarge`**, set in `local.tf`), **Amazon Linux 2023**, **NICE/Amazon DCV** (HTTPS on **8443**), **SSM** (no password stored in Terraform), a **security group** with CIDRs from `local.tf`, first-boot **user data** (GNOME, DCV, PyBullet in `/opt/pybullet-venv`), and helper scripts under **`src/ssm-ec2-inital-setup/`** to open an **SSM** session so you can set **`ec2-user`**’s password for DCV. The VPC is selected by the **`Name`** tag (`local.vpc_name` in `local.tf` → `data.aws_vpc` in `data.tf`).
+**What is deployed today** (see `infrastructure/`): a **GPU** EC2 instance (default type **`g4dn.2xlarge`**, set in `local.tf`), **Amazon Linux 2023**, **NICE/Amazon DCV** (HTTPS on **8443**), **SSM** (no password stored in Terraform), a **security group** with CIDRs from `local.tf`, first-boot **user data** (GNOME, DCV, PyBullet in `/opt/pybullet-venv`). The VPC is selected by the **`Name`** tag (`local.vpc_name` in `local.tf` → `data.aws_vpc` in `data.tf`).
 
 ## Architecture (overview)
 
@@ -28,6 +28,7 @@ flowchart TB
   end
   subgraph net["VPC by Name tag"]
     SG["Security group: SSH, DCV"]
+    SN["Subnet: Name *public* filter in vpc"]
   end
   subgraph compute["Compute"]
     AL2023["Amazon Linux 2023 AMI"]
@@ -40,6 +41,7 @@ flowchart TB
   TF --> G4
   G4 --> AL2023
   G4 --> SG
+  G4 --> SN
   G4 --> UD
   G4 --> SSM
 ```
@@ -49,13 +51,12 @@ flowchart TB
 | Path | Purpose |
 |------|--------|
 | `infrastructure/provider.tf` | AWS provider, **S3 backend** (state); align **`profile`** with your CLI profile. |
-| `infrastructure/local.tf` | **Instance** settings, **`allowed_ingress_cidrs`**, **`vpc_name`** (must match the VPC’s **`Name`** tag in EC2), etc. |
+| `infrastructure/local.tf` | **Instance** settings, **`allowed_ingress_cidrs`**, **`vpc_name`** (must match the VPC’s **`Name`** tag in EC2), optional **`ec2_subnet_id`** (else subnets with **`Name` *public* auto-picked), etc. |
 | `infrastructure/data.tf` | `data.aws_vpc` (by **`local.vpc_name`**) and account/region data. |
 | `infrastructure/compute.tf` | Wires the **ec2-instance** module. |
 | `infrastructure/outputs.tf` | **Public IP**, instance id, **region** (SSM/CLI helpers). |
 | `infrastructure/modules/ec2-instance` | IAM (SSM), security group, instance, `user_data.sh` |
-| `src/ssm-ec2-inital-setup/ssm-connect.sh`, `ssm-connect.ps1` | **WSL** / **Windows** helpers for `aws ssm start-session` using outputs from `infrastructure/`. |
-| `src/` (other) | Application and simulation code (to be expanded). |
+| `src/` | Application and simulation code (to be expanded). |
 
 ## Security: instance ingress
 
@@ -92,7 +93,7 @@ If you use **OpenTofu**, run the same with **`tofu`** instead of **`terraform`**
 | `terraform output -raw pybullet_host_subnet_id` | **Subnet** the instance is in (check **public** / route table in console if SSM is offline) |
 | `terraform output -raw aws_region` | **Region** for CLI commands |
 
-**First boot:** user data may take **a long time** (desktop packages, DCV, reboot). Wait until the instance is **Running**; if the URL does not load yet, wait a few more minutes. **SSM** may show **Online** only after a short delay; see **EC2 → Systems Manager → Fleet Manager**.
+**First boot:** user data may take **a long time** (desktop packages, DCV, reboot). Wait until the instance is **Running**; if the URL does not load yet, wait a few more minutes. **SSM** may show **Online** only after a short delay.
 
 ## After deploy: use NICE / Amazon DCV
 
@@ -101,20 +102,9 @@ Follow these in order the first time.
 1. **Ingress**  
    If you restricted `allowed_ingress_cidrs`, your **current** public IP must be included, or the browser will not reach **8443** (or SSH **22**). You can re-apply after editing `local.tf`.
 
-2. **SSM: open a shell and set the password for DCV**  
-   DCV signs in as **`ec2-user`** with a **Linux password** you set yourself. The recommended way (no static secret in Terraform) is **Session Manager**:
-   - In **Fleet Manager**, confirm the instance is **Online**.
-   - From the **repository root** (works from **WSL** on a Windows checkout under `/mnt/c/...`):
-
-     ```bash
-     chmod +x src/ssm-ec2-inital-setup/ssm-connect.sh
-     export AWS_PROFILE=personal
-     ./src/ssm-ec2-inital-setup/ssm-connect.sh
-     ```
-
-   - **Windows (PowerShell):** `.\src\ssm-ec2-inital-setup\ssm-connect.ps1` (set `$env:AWS_PROFILE` as needed).  
-   - Inside the session: `sudo passwd ec2-user` and choose a strong password.  
-   - **Manual** (from `infrastructure/`):
+2. **SSM (Session Manager)**  
+   - **Console:** In **EC2**, select the instance → **Connect** → **Session Manager** → **Connect**.  
+   - **Terminal** (from `infrastructure/`, with the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) installed):
 
      ```bash
      aws ssm start-session \
@@ -123,13 +113,13 @@ Follow these in order the first time.
        --profile personal
      ```
 
-   Optional: `export AWS_REGION=us-east-1` if your environment does not pick up the same region as `provider.tf`.
+   Inside the session, set a login password for DCV: `sudo passwd ec2-user`.
 
 3. **Open the DCV web client**  
    In a browser, open the DCV URL. Run `terraform output -raw pybullet_host_dcv_url` to print **`https://<PUBLIC_IP>:8443`**, or copy the **`pybullet_host_dcv_url`** value from the apply output in your UI. If it is `null`, the instance has no public address yet (subnets / route tables). You may need to **accept a certificate warning** for a test server.
 
 4. **Sign in to DCV**  
-   User **`ec2-user`**, password from step 2. You should see the **GNOME** desktop. PyBullet is installed in a venv: **`/opt/pybullet-venv`** (sourced in **`ec2-user`**’s `~/.bashrc` for new shells). Open a terminal and run: `source /opt/pybullet-venv/bin/activate` if needed, then your Python or PyBullet commands.
+   User **`ec2-user`**, using the password you set with **`sudo passwd ec2-user`** in the SSM shell. You should see the **GNOME** desktop. PyBullet is installed in a venv: **`/opt/pybullet-venv`** (sourced in **`ec2-user`**’s `~/.bashrc` for new shells). Open a terminal and run: `source /opt/pybullet-venv/bin/activate` if needed, then your Python or PyBullet commands.
 
 5. **Optional: native Amazon DCV client**  
    For some workloads, the native client is preferable: [Download Amazon DCV](https://www.amazondcv.com/) and connect to **`<PUBLIC_IP>:8443`**.
@@ -143,4 +133,4 @@ aws sts get-caller-identity --profile personal
 
 **Why `terraform plan` shows “no changes”:** the **saved state** already matches the **current .tf** (including subnet selection). You only see a **replace** the first time you apply after a change, or if you [replace](https://developer.hashicorp.com/terraform/cli/commands/apply#replace) the instance. That does *not* by itself mean SSM is working—confirm the subnet has a path to the internet (or endpoints) and that the **SSM** agent is running.
 
-If SSM stays **Offline**, the instance must reach **AWS Systems Manager** on **HTTPS (443)** (SSM agent to regional endpoints). Common causes: **no internet path** (instance in a **private subnet** with no **NAT gateway** and no **SSM/VPC interface endpoints**), wrong **IAM** (this stack uses **`AmazonSSMManagedInstanceCore`** on the instance profile), or the node is still **booting / running user data** (wait, then check again). The module **prefers a public subnet** (`map-public-ip-on-launch`) when you do not set **`ec2_subnet_id`** in `local.tf`, so the default is suitable for a typical default VPC. In a **private-only** VPC, set **`ec2_subnet_id`** to a subnet that has **NAT** (or add [SSM endpoints](https://docs.aws.amazon.com/systems-manager/latest/userguide/setup-create-vpc.html)) and see [SSM agent troubleshooting](https://docs.aws.amazon.com/systems-manager/latest/userguide/troubleshooting-ssm-agent.html).
+If SSM stays **Offline**, the instance must reach **AWS Systems Manager** on **HTTPS (443)** (SSM agent to regional endpoints). Common causes: **no internet path** (instance in a **private subnet** with no **NAT gateway** and no **SSM/VPC interface endpoints**), wrong **IAM** (this stack uses **`AmazonSSMManagedInstanceCore`** on the instance profile), or the node is still **booting / running user data** (wait, then check again). When **`ec2_subnet_id`** is unset, Terraform uses **`data.aws_subnets.filtered`**: subnets in **`local.vpc_name`**’s VPC whose **`tag:Name`** matches **`*public*`** (EC2 wildcard filter); the first subnet id (**sorted**) is chosen. In a **private-only** VPC, set **`ec2_subnet_id`** or add [SSM endpoints](https://docs.aws.amazon.com/systems-manager/latest/userguide/setup-create-vpc.html)—see [SSM agent troubleshooting](https://docs.aws.amazon.com/systems-manager/latest/userguide/troubleshooting-ssm-agent.html).
