@@ -23,6 +23,8 @@ fi
 systemctl set-default graphical.target
 
 # --- Build / scientific stack deps for PyBullet ------------------------------------------------
+# Do not install the full `curl` RPM: AL2023 keeps `curl-minimal` for /usr/bin/curl (Desktop pulls it).
+# Explicit `dnf install curl` fails with conflicting packages vs curl-minimal and breaks cloud-init.
 dnf -y install \
   python3 \
   python3-pip \
@@ -32,8 +34,7 @@ dnf -y install \
   make \
   git \
   mesa-libGL \
-  libgomp \
-  curl
+  libgomp
 
 # --- NICE/Amazon DCV (GPG + tarball from official CloudFront; version tracks “latest” symlink) ----
 rpm --import https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
