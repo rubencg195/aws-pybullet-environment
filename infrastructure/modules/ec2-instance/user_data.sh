@@ -9,6 +9,20 @@ exec > >(tee /var/log/user-data-pyb.log) 2>&1
 
 dnf -y update
 
+# --- NVIDIA (G4dn / G5 / G6): Xorg+GDM need a working DRM stack or GDM loops "X display failures" and DCV
+# stays on "Connecting…". Install before GNOME. Ref: https://docs.aws.amazon.com/linux/al2023/ug/nvidia-drivers.html
+INSTANCE_TYPE="$(curl -fsS --max-time 2 http://169.254.169.254/latest/meta-data/instance-type || echo "")"
+case "${INSTANCE_TYPE}" in
+  g4dn*|g5*|g6*)
+    dnf -y install "kernel-devel-$(uname -r)" "kernel-headers-$(uname -r)" gcc make
+    dnf -y install nvidia-release
+    dnf -y install nvidia-driver-cuda
+    ;;
+  *)
+    echo "Skipping NVIDIA packages (instance type: ${INSTANCE_TYPE:-unknown})."
+    ;;
+esac
+
 # --- Graphical environment (required for DCV console sessions on AL2023) -----------------------
 dnf groupinstall -y "Desktop"
 install -d /etc/gdm
@@ -60,6 +74,8 @@ dnf install -y \
   ./nice-dcv-gl-*.rpm
 
 usermod -aG video dcv || true
+# Console session for ec2-user often needs access to the GPU/video stack on GPU instances.
+usermod -aG video ec2-user || true
 
 # --- PyBullet venv (PEP 668 / externally-managed) -----------------------------------------------
 VENV="/opt/pybullet-venv"

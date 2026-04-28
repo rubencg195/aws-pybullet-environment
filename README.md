@@ -302,6 +302,69 @@ Optional sanity check (**SSM** shell): verify **`ec2-user`** has a usable passwo
 sudo passwd --status ec2-user
 ```
 
+#### DCV stuck on **“Connecting…”** (web **and/or** native client)
+
+If you **already signed in** (username/password accepted) and the UI spins on **Connecting** with a **broken/disconnected monitor** icon in the toolbar—that usually means **`dcvserver`** is up (**TCP :8443** worked) but DCV **cannot attach to a desktop session** (**GDM**/**X**/**automatic console** not ready), not a wrong password.
+
+| Situation | Likely focus |
+|----------|----------------|
+| **Both** web **and** DCV app stuck | **Server-side** session/display—run the **SSM diagnostics** below (**not** only browser WebSockets). |
+| **Only** the browser sticks | First try **native client**; then check **WebSockets** (**F12 → Network → WS**). |
+| Right after **boot** / **first login** | Wait **several minutes**, **reload** once (**GDM** may still be bringing up **GNOME/X**). |
+
+**SSM diagnostics** (on the instance):
+
+```bash
+sudo systemctl status dcvserver --no-pager
+sudo systemctl status gdm --no-pager
+```
+
+```bash
+sudo dcv list-sessions 2>/dev/null || true
+```
+
+```bash
+sudo journalctl -u dcvserver -u gdm --since "30 min ago" --no-pager | tail -120
+```
+
+**Soft restart** (often unsticks a missed attach between **GDM** and **DCV**):
+
+```bash
+sudo systemctl restart gdm
+sleep 20
+sudo systemctl restart dcvserver
+```
+
+Reconnect from the client in **~1 minute**.
+
+#### **`GDM`**: **`maximum number of X display failures`** / **`Session never registered`** (**`g4dn`** / **`g5`** / **`g6`**)
+
+If **`journalctl -u gdm`** repeats **`GdmDisplay: Session never registered`** and ends with **`GdmLocalDisplayFactory: maximum number of X display failures reached`**, **Xorg** is crashing (**no stable display** → **GNOME never starts** → **DCV** spins on **Connecting**).
+
+On **GPU** instance types **without** NVIDIA kernel drivers loaded yet, **GDM+X** commonly fail exactly like this—the issue is **not** DCV **`8443`** or **your password**, it is **graphics bring-up**.
+
+**Current `user_data`** (for **`g4dn*`** / **`g5*`** / **`g6*`**) installs **[NVIDIA drivers on Amazon Linux 2023](https://docs.aws.amazon.com/linux/al2023/ug/nvidia-drivers.html)** (`nvidia-release`, `nvidia-driver-cuda`) **before** **`dnf groupinstall "Desktop"`** so **X/GDM** can start on first boot.
+
+**Already-running instance baked without that step** — install drivers over **SSM**, then **`reboot`**, then verify **`nvidia-smi`** shows the GPU:
+
+```bash
+sudo dnf install -y "kernel-devel-$(uname -r)" "kernel-headers-$(uname -r)" gcc make
+sudo dnf install -y nvidia-release
+sudo dnf install -y nvidia-driver-cuda
+sudo reboot
+```
+
+```bash
+nvidia-smi
+```
+
+Then retry DCV (**`pam_unix(dcv:auth): authentication failure`** in logs sometimes clears once **X** works; still ensure **`sudo passwd ec2-user`** matches what you type in DCV.)
+
+Or **`terraform apply -replace='module.pybullet_host.aws_instance.this'`** so the refreshed **`user_data`** runs cleanly on a new instance.
+
+> [!TIP]
+> For **browser-only** hangs (native client works), check **F12 → Network → WS**. If **both** clients fail, prioritize **`gdm`**/**X**/NVIDIA (**above**) before blaming **WebSockets** alone.
+
 ---
 
 ### 6. Optional: native Amazon DCV client
