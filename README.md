@@ -67,8 +67,33 @@ That is convenient for a first test but **not** appropriate for a long-lived or 
 ## Prerequisites
 
 - An **AWS account** and a **named CLI profile** (examples below use `personal`; it must match **`profile`** in `infrastructure/provider.tf` or export **`AWS_PROFILE`**).
-- The **HashiCorp Terraform** CLI (examples use **`terraform`**; **OpenTofu** users can substitute **`tofu`**) and **AWS CLI v2** with the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) if you will use SSM.
+- The **HashiCorp Terraform** CLI (examples use **`terraform`**; **OpenTofu** users can substitute **`tofu`**) and **AWS CLI v2**.
 - In **`infrastructure/local.tf`**, set **`vpc_name`** to the **`Name` tag** of the VPC you use. If `terraform apply` cannot find a VPC, add or correct that tag in the AWS console for that VPC.
+
+### Session Manager plugin for CLI SSM sessions
+
+`aws ssm start-session` does **not** work with the AWS CLI alone: it needs the **Session Manager plugin** installed in the **same** environment as the `aws` binary (if you use **WSL**, install the **Linux** plugin **inside WSL**, not only the Windows installer on the host).
+
+**Ubuntu / Debian / WSL (64-bit)**
+
+1. Download the Ubuntu 64-bit package ([full install doc](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)):
+
+   ```bash
+   curl -fsSLo /tmp/session-manager-plugin.deb \
+     https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb
+   ```
+
+2. Install it (adjust the path if you saved the `.deb` somewhere else):
+
+   ```bash
+   sudo dpkg -i /tmp/session-manager-plugin.deb
+   ```
+
+   A successful install ends with **`Creating symbolic link for session-manager-plugin`** (and similar **`Setting up session-manager-plugin`** lines).
+
+3. **Check:** `session-manager-plugin --version` — or **`which session-manager-plugin`**.
+
+If **`aws ssm ...`** prints **`SessionManagerPlugin is not found`**, the plugin is missing or not on `PATH` in that shell. Until it works from the CLI, use **EC2 → Connect → Session Manager** in the **AWS Console** instead.
 
 ## Deploy the stack
 
@@ -103,17 +128,37 @@ Follow these in order the first time.
    If you restricted `allowed_ingress_cidrs`, your **current** public IP must be included, or the browser will not reach **8443** (or SSH **22**). You can re-apply after editing `local.tf`.
 
 2. **SSM (Session Manager)**  
-   - **Console:** In **EC2**, select the instance → **Connect** → **Session Manager** → **Connect**.  
-   - **Terminal** (from `infrastructure/`, with the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) installed):
+
+   - **Console:** **EC2** → select the instance → **Connect** → **Session Manager** → **Connect**.
+
+   - **Terminal:** After you install the [Session Manager plugin](#session-manager-plugin-for-cli-ssm-sessions), run **`start-session`** from **`infrastructure/`** (same **profile** and **region** as `provider.tf`):
 
      ```bash
+     cd infrastructure
      aws ssm start-session \
        --target "$(terraform output -raw pybullet_host_instance_id)" \
        --region "$(terraform output -raw aws_region)" \
        --profile personal
      ```
 
-   Inside the session, set a login password for DCV: `sudo passwd ec2-user`.
+   What you should see:
+
+   ```text
+   Starting session with SessionId: ...
+   sh-5.2$
+   ```
+
+   The shell may start as **`sh`** (prompt like **`sh-5.2$`**). Type **`bash`** if you prefer **`bash`**; you might then show as **`ssm-user`** on Amazon Linux—that is normal.
+
+   Inside the remote shell, set the Linux password **`ec2-user`** will use with DCV (**DCV logs in as `ec2-user`**, not as `ssm-user`):
+
+   ```bash
+   sudo passwd ec2-user
+   ```
+
+   Exit the session when done (`exit`, or **`exit`** again if nested shells). Terraform prints **`Exiting session with sessionId: ...`** when the session closes.
+
+   If **`SessionManagerPlugin is not found`**, finish the plugin install above or use the **console** path.
 
 3. **Open the DCV web client**  
    In a browser, open the DCV URL. Run `terraform output -raw pybullet_host_dcv_url` to print **`https://<PUBLIC_IP>:8443`**, or copy the **`pybullet_host_dcv_url`** value from the apply output in your UI. If it is `null`, the instance has no public address yet (subnets / route tables). You may need to **accept a certificate warning** for a test server.
