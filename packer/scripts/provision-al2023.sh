@@ -44,13 +44,18 @@ dnf -y install \
   libgomp
 
 rpm --import https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
-DCV_TGZ="nice-dcv-amzn2023-x86_64.tgz"
+# Pinned NICE DCV 2025.0 (Amazon Linux 2023 x86_64). Update URL + SHA256 together when bumping DCV.
+# See: https://www.nice-dcv.com/ and AWS "Install the Amazon DCV Server on Linux".
+DCV_TGZ_URL="https://d1uj6qtbmh3dt5.cloudfront.net/2025.0/Servers/nice-dcv-2025.0-20103-amzn2023-x86_64.tgz"
+DCV_TGZ_FILE="nice-dcv-2025.0-20103-amzn2023-x86_64.tgz"
+DCV_TGZ_SHA256="d98eb986f3b547af22a7732ca26cb6541c3842b9ed57218f503c9acc3b29e7e2"
 DCV_DIR="/tmp/dcv-rpms"
 rm -rf "${DCV_DIR}"
 mkdir -p "${DCV_DIR}"
 cd "${DCV_DIR}"
-curl -fL -O "https://d1uj6qtbmh3dt5.cloudfront.net/${DCV_TGZ}"
-tar -xzf "${DCV_TGZ}"
+curl -fL -o "${DCV_TGZ_FILE}" "${DCV_TGZ_URL}"
+echo "${DCV_TGZ_SHA256}  ${DCV_TGZ_FILE}" | sha256sum -c -
+tar -xzf "${DCV_TGZ_FILE}"
 shopt -s nullglob
 _dcv_subdirs=(nice-dcv-*-amzn2023-x86_64)
 if [ ${#_dcv_subdirs[@]} -ne 1 ]; then

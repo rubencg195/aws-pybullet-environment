@@ -7,5 +7,5 @@ module "pybullet_host" {
   key_name         = local.ec2_key_name
   subnet_id        = local.ec2_subnet_id
   sg_ingress_cidrs = local.sg_ingress_cidrs
-  ami_id           = local.packer_ami_id_override != null ? local.packer_ami_id_override : data.aws_ami.pybullet_golden[0].id
+  ami_id           = local.packer_ami_id_override != null ? local.packer_ami_id_override : data.aws_ssm_parameter.golden_ami_id[0].value
 }

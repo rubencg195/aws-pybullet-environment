@@ -27,6 +27,12 @@ variable "project_name" {
   description = "Tag Project and AMI name prefix."
 }
 
+variable "aws_cli_profile" {
+  type        = string
+  default     = "personal"
+  description = "AWS CLI profile for SSM publish (shell-local post-processor on the apply host)."
+}
+
 variable "builder_instance_type" {
   type        = string
   default     = "g5.xlarge"
@@ -92,5 +98,20 @@ build {
       "uname -r",
       "test -d /opt/pybullet-venv",
     ]
+  }
+
+  post-processor "manifest" {
+    output     = "${path.root}/packer-manifest.json"
+    strip_path = true
+  }
+
+  post-processor "shell-local" {
+    environment_vars = [
+      "AWS_PROFILE=${var.aws_cli_profile}",
+      "PACKER_MANIFEST=${path.root}/packer-manifest.json",
+      "AWS_REGION=${var.region}",
+      "PACKER_PROJECT=${var.project_name}",
+    ]
+    script = "${path.root}/scripts/publish-ami-ssm.sh"
   }
 }

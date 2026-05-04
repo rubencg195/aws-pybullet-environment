@@ -4,8 +4,13 @@ output "aws_region" {
 }
 
 output "pybullet_golden_ami_id" {
-  description = "AMI id used for the PyBullet host (Packer golden or packer_ami_id_override)"
-  value       = local.packer_ami_id_override != null ? local.packer_ami_id_override : data.aws_ami.pybullet_golden[0].id
+  description = "AMI id used for the PyBullet host (SSM parameter or packer_ami_id_override)"
+  value       = local.packer_ami_id_override != null ? local.packer_ami_id_override : data.aws_ssm_parameter.golden_ami_id[0].value
+}
+
+output "pybullet_golden_ami_ssm_parameter_name" {
+  description = "SSM parameter name holding the golden AMI id (written by Packer)"
+  value       = local.packer_golden_ami_ssm_parameter_name
 }
 
 output "pybullet_host_instance_id" {

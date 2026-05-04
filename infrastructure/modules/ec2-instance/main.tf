@@ -1,14 +1,14 @@
 resource "aws_instance" "this" {
-  ami                         = var.ami_id
-  instance_type               = var.instance_type
-  key_name                    = var.key_name
-  subnet_id                   = local.subnet_id
+  ami           = var.ami_id
+  instance_type = var.instance_type
+  key_name      = var.key_name
+  subnet_id     = local.subnet_id
 
   associate_public_ip_address = true
 
   vpc_security_group_ids = [aws_security_group.this.id]
   iam_instance_profile   = aws_iam_instance_profile.this.name
-  user_data                = var.user_data != null ? var.user_data : ""
+  user_data              = var.user_data != null ? var.user_data : ""
 
   root_block_device {
     volume_type = "gp3"

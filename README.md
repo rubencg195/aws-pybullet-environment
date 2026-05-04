@@ -2,9 +2,9 @@
 
 Infrastructure and tooling to run **PyBullet** physics simulation in **Amazon Web Services (AWS)**, so robotics and simulation work can be performed **remotely** from a **low-specification or portable client** (for example, a small laptop on Wi‑Fi) while the **GPU and CPU work** run on a **dedicated host in the cloud**. The goal is to separate **where you work** from **where the simulation runs**: a graphical desktop, DCV, and the PyBullet environment live on **EC2**; the client only needs a **browser** or the **NICE DCV** / **SSM** tooling.
 
-**Production path:** **HashiCorp Packer** bakes **Amazon Linux 2023** with **NVIDIA drivers** (on **g4dn** / **g5** / **g6**-class builders), **GNOME**, **NICE/Amazon DCV**, and **`/opt/pybullet-venv`** (PyBullet stack) into a **golden AMI**. **OpenTofu** runs **`packer build`** from a **`null_resource`** **`local-exec`** (`infrastructure/packer.tf`), then selects the newest self-owned AMI by tags and launches **EC2** with **empty `user_data`**—nothing is installed at first boot on the instance.
+**Production path:** **HashiCorp Packer** bakes **Amazon Linux 2023** with **NVIDIA drivers** (on **g4dn** / **g5** / **g6**-class builders), **GNOME**, **NICE/Amazon DCV** (pinned **DCV 2025.0** tarball + **SHA256** check), and **`/opt/pybullet-venv`** into a **golden AMI**. **`packer build`** finishes with a **manifest** + **`shell-local`** step that writes the new **AMI id** to **SSM Parameter Store** (path **`/aws-pybullet-environment/golden-ami-id`**, from **`local.project_name`** in **`local.tf`**). **OpenTofu** reads **`data.aws_ssm_parameter`** and launches **EC2** with **empty `user_data`**.
 
-**What is deployed today** (see `infrastructure/`): **`null_resource`** drives **Packer** (requires **Packer CLI** + **AWS credentials** on the apply host), **`data.aws_ami`** resolves the golden image, and the **ec2-instance** module runs a **GPU** instance (default **`g5.xlarge`**) with **SSM**, **DCV :8443**, and ingress from **`local.allowed_ingress_cidrs`**. The VPC is chosen by **`local.vpc_name`** → `data.aws_vpc`.
+**What is deployed today** (see `infrastructure/`): **`null_resource`** runs **Packer** (requires **Packer CLI**, **Python 3**, **AWS CLI**, and IAM including **`ssm:PutParameter`** / **`ssm:GetParameter`** on that parameter path). The **ec2-instance** module uses the **SSM** value (or **`local.packer_ami_id_override`**) as **`ami_id`**. Default instance type **`g5.xlarge`**, **SSM** for the instance, **DCV :8443**, ingress from **`local.allowed_ingress_cidrs`**, VPC from **`local.vpc_name`**.
 
 ## Architecture (overview)
 
@@ -28,7 +28,7 @@ flowchart TB
   subgraph iac["Infrastructure as code"]
     OT["OpenTofu in infrastructure/"]
     PK["packer.tf — null_resource packer build"]
-    AMI["data.aws_ami — golden tags"]
+    SSM["data.aws_ssm_parameter — golden AMI id"]
   end
   subgraph net["VPC by Name tag"]
     SG["Security group: SSH, DCV"]
@@ -43,7 +43,7 @@ flowchart TB
     SSM["IAM: SSM Session Manager"]
   end
   OT --> PK
-  PK --> AMI
+  PK --> SSM
   OT --> G5
   G5 --> GOLD
   G5 --> SG
@@ -81,7 +81,7 @@ flowchart TB
   subgraph iac["OpenTofu (infrastructure/)"]
     OT["tofu apply -auto-approve"]
     NR["null_resource.packer_pybullet_ami"]
-    DATA["data.aws_ami PyBulletPacker=golden-al2023"]
+    DATA["data.aws_ssm_parameter golden-ami-id"]
     MOD["module ec2-instance"]
   end
   subgraph packer["Packer (packer/)"]
@@ -120,29 +120,30 @@ flowchart TB
 
 | Path | Purpose |
 |------|--------|
-| `packer/pybullet-al2023.pkr.hcl` | **Packer** template: **amazon-ebs** builder on **AL2023**, **g5**-class build instance, tags for OpenTofu **`data.aws_ami`**. |
-| `packer/scripts/provision-al2023.sh` | Shell provisioner: **NVIDIA**, **GNOME**, **DCV**, **`/opt/pybullet-venv`** (same intent as the former cloud-init script). |
-| `infrastructure/packer.tf` | **`null_resource`** runs **`packer init`**, **`packer validate`**, **`packer build`**; **`data.aws_ami`** selects the newest golden AMI. |
+| `packer/pybullet-al2023.pkr.hcl` | **Packer** template: **amazon-ebs** builder, **manifest** + **SSM publish** post-processors. |
+| `packer/scripts/provision-al2023.sh` | Shell provisioner: **NVIDIA**, **GNOME**, **pinned DCV** tarball + **SHA256**, **`/opt/pybullet-venv`**. |
+| `packer/scripts/publish-ami-ssm.sh` | **Post-build**: read **Packer manifest**, **`aws ssm put-parameter`** golden AMI id. |
+| `infrastructure/packer.tf` | **`null_resource`** runs **`packer`**; **`data.aws_ssm_parameter`** reads **`local.packer_golden_ami_ssm_parameter_name`**. |
 | `.gitattributes` | Forces **LF** line endings for **`*.tf`** / **`*.pkr.hcl`** (avoids **`local-exec`** bash CRLF failures on Windows checkouts). |
 | `infrastructure/provider.tf` | AWS provider, **S3 backend** (OpenTofu remote state); align **`profile`** with your CLI profile. |
 | `infrastructure/local.tf` | **Instance** settings, **`packer_ami_id_override`**, **`allowed_ingress_cidrs`**, **`vpc_name`**, optional **`ec2_subnet_id`**, etc. |
 | `infrastructure/data.tf` | **`data.aws_vpc`**, **`data.aws_subnets`** (public `Name` filter), account/region. |
 | `infrastructure/compute.tf` | Wires the **ec2-instance** module with **`ami_id`** from Packer or override. |
-| `infrastructure/outputs.tf` | **Public IP**, instance id, **`pybullet_golden_ami_id`**, **region**. |
+| `infrastructure/outputs.tf` | **Public IP**, instance id, **`pybullet_golden_ami_id`**, **`pybullet_golden_ami_ssm_parameter_name`**, **region**. |
 | `infrastructure/modules/ec2-instance` | IAM (SSM), security group, instance; **`user_data`** defaults to **empty**; legacy **`user_data.sh`** is a no-op reference. |
 | `src/` | Application and simulation code (to be expanded). |
 
 ### Packer + OpenTofu (golden AMI)
 
-From **`infrastructure/`**, **`null_resource.packer_pybullet_ami`** runs **`packer init`**, **`packer validate`**, and **`packer build`** against **`packer/pybullet-al2023.pkr.hcl`**, passing **`vpc_id`**, **`subnet_id`** (same public-subnet rule as the EC2 module), **`region`**, and **`project_name`**. The resulting AMI is tagged **`Project=<project_name>`** and **`PyBulletPacker=golden-al2023`**; **`data.aws_ami.pybullet_golden`** selects the **newest** match in your account. The **ec2-instance** module uses that **`ami_id`** and **empty `user_data`**.
+From **`infrastructure/`**, **`null_resource.packer_pybullet_ami`** runs **`packer init`**, **`packer validate`**, and **`packer build`** against **`packer/pybullet-al2023.pkr.hcl`**, passing **`vpc_id`**, **`subnet_id`**, **`region`**, **`project_name`**, and **`aws_cli_profile`**. After the AMI is created, **Packer** runs **`manifest`** + **`publish-ami-ssm.sh`**, which **`aws ssm put-parameter`**’s the AMI id to **`local.packer_golden_ami_ssm_parameter_name`** (default **`/aws-pybullet-environment/golden-ami-id`**). The **ec2-instance** module reads **`data.aws_ssm_parameter`** for **`ami_id`** (still **empty `user_data`**). AMIs remain tagged **`Project`** / **`PyBulletPacker`** for humans and cost tooling; **OpenTofu no longer picks “newest tag”**.
 
-**Prerequisites on the apply host:** [**Packer**](https://developer.hashicorp.com/packer/install) CLI, **AWS CLI v2**, and IAM for **`local.aws_cli_profile`** (default **`personal`**) sufficient to **run temporary EC2** for the build (**`ec2:RunInstances`**, **`ec2:CreateImage`**, **`ec2:Describe*`**, **`iam:PassRole`** if you add instance profiles later, etc.). The Packer builder uses **`g5.xlarge`** so **NVIDIA** packages match **g4dn/g5/g6**-class instances.
+**Prerequisites on the apply host:** [**Packer**](https://developer.hashicorp.com/packer/install), **Python 3** (for **`publish-ami-ssm.sh`**), **AWS CLI v2**, and IAM for **`local.aws_cli_profile`** to **run temporary EC2** for the build and to **`ssm:PutParameter`** / **`ssm:GetParameter`** on the path in **`local.packer_golden_ami_ssm_parameter_name`** (**`/aws-pybullet-environment/golden-ami-id`** with the default **`local.project_name`**). Typical broad policies (**`PowerUserAccess`**, **`AdministratorAccess`**) cover this; for least privilege add explicit **EC2** build + **SSM** parameter ARNs.
 
-**First-time / empty account:** If a full **`tofu plan`** errors because **no golden AMI** exists yet, run **`tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]`** once (long build), then a **full** **`tofu apply -auto-approve`**. Alternatively set **`local.packer_ami_id_override`** in **`local.tf`** to an existing **`ami-…`** to **skip** Packer in OpenTofu.
+**First-time / empty account:** If **`tofu plan`** errors because the **SSM parameter does not exist yet**, run **`tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]`** once (long **Packer** run), then a **full** **`tofu apply -auto-approve`**. Alternatively set **`local.packer_ami_id_override`** to an **`ami-…`** to **skip** Packer and SSM reads.
 
-**Rebuild triggers:** **`filesha256`** of **`packer/pybullet-al2023.pkr.hcl`** and **`packer/scripts/provision-al2023.sh`**. Changing them creates a **new** AMI; the next apply may **replace** the instance if **`data.aws_ami`** resolves to the newer image.
+**Rebuild triggers:** **`filesha256`** of **`packer/pybullet-al2023.pkr.hcl`**, **`packer/scripts/provision-al2023.sh`**, and **`packer/scripts/publish-ami-ssm.sh`**, plus the **SSM parameter name** string. Changes force a new **Packer** run and a new **SSM** value; the next apply may **replace** the EC2 instance when the AMI id changes.
 
-**IAM (apply principal):** The profile used for **`tofu apply`** must be allowed to start the **temporary** Packer builder (typical broad policies: **`PowerUserAccess`**, **`AdministratorAccess`**, or a custom policy with **`ec2:RunInstances`**, **`ec2:TerminateInstances`**, **`ec2:CreateImage`**, **`ec2:Describe*`**, **`ec2:CreateTags`**, **`ec2:CreateSnapshot`**, **`ec2:DeleteSnapshot`** for lifecycle, plus **`iam:CreateServiceLinkedRole`** if AWS creates EC2-linked roles on first use).
+**IAM (apply principal):** In addition to **EC2** APIs for the Packer builder (**`ec2:RunInstances`**, **`ec2:TerminateInstances`**, **`ec2:CreateImage`**, **`ec2:Describe*`**, **`ec2:CreateTags`**, snapshots, etc.), the same profile must allow **`ssm:PutParameter`** and **`ssm:GetParameter`** (and **`ssm:DescribeParameters`** if you use the console) on **`arn:aws:ssm:REGION:ACCOUNT_ID:parameter/aws-pybullet-environment/golden-ami-id`** (adjust **`project_name`** if you change **`local.project_name`**).
 
 **Cost:** Each **`packer build`** runs a **g5.xlarge** for the duration of the install (often **30–60+ minutes**) and stores a new **AMI snapshot** (ongoing storage charges). Deregister unused AMIs and snapshots when iterating.
 
@@ -155,6 +156,7 @@ After apply:
 ```bash
 cd infrastructure
 tofu output -raw pybullet_golden_ami_id
+tofu output -raw pybullet_golden_ami_ssm_parameter_name
 ```
 
 ## TO-DO
@@ -168,11 +170,11 @@ Search this file for these **exact** headings (outline / **Ctrl+F**):
 | Heading | What you get |
 |--------|----------------|
 | **Architecture (overview)** | Client → DCV → EC2. |
-| **Architecture (detailed)** | OpenTofu, Packer **`null_resource`**, golden **`data.aws_ami`**, empty **`user_data`**. |
+| **Architecture (detailed)** | OpenTofu, Packer **`null_resource`**, golden AMI id via **SSM**, empty **`user_data`**. |
 | **Architecture (Packer golden AMI — overview)** | Apply host → **`packer build`** → AMI → EC2. |
 | **Architecture (Packer golden AMI on AWS — detailed)** | Full component diagram (Packer + OpenTofu + VPC + AMI contents). |
 | **Repository layout** | Paths and file roles. |
-| **Packer + OpenTofu (golden AMI)** | Tags, subnet rule, **`packer_ami_id_override`**, IAM, cost, state migration, LF line endings. |
+| **Packer + OpenTofu (golden AMI)** | Subnet rule, **SSM** parameter, **`packer_ami_id_override`**, IAM (**EC2** + **SSM**), cost, LF line endings. |
 | **Deploy the stack** | **`tofu init`**, optional **`-target`** first apply, **`tofu apply`**, outputs. |
 | **Prerequisites** | AWS profile, OpenTofu, AWS CLI, **`vpc_name`**. |
 | **Install Packer on Linux or WSL** | Zip or **`apt`** install, **`PATH`**, **`packer init`**, **`packer validate`**. |
@@ -187,12 +189,12 @@ Search this file for these **exact** headings (outline / **Ctrl+F**):
 
 ### What the golden AMI contains
 
-The only supported runtime in this repo is the **Packer-built Amazon Linux 2023** image: **NVIDIA** drivers (when the builder is **g4dn** / **g5** / **g6** class), **GNOME + GDM**, **NICE DCV** (AL2023 RPMs, **`dcv.conf`** automatic console for **`ec2-user`**), and **`/opt/pybullet-venv`** with **PyBullet** and scientific Python wheels. **VS Code** and **code-server** are **not** in this AMI (add via **Next** / custom provisioner if needed).
+The only supported runtime in this repo is the **Packer-built Amazon Linux 2023** image: **NVIDIA** drivers (when the builder is **g4dn** / **g5** / **g6** class), **GNOME + GDM**, **NICE DCV** **2025.0** (pinned tarball + **SHA256** check; AL2023 RPMs, **`dcv.conf`** automatic console for **`ec2-user`**), and **`/opt/pybullet-venv`** with **PyBullet** and scientific Python wheels. **VS Code** and **code-server** are **not** in this AMI (add via **Next** / custom provisioner if needed).
 
 ### Done
 
-1. **Packer**: **`packer/pybullet-al2023.pkr.hcl`** (**amazon-ebs**, **AL2023**, **g5.xlarge** builder, **80 GiB** root, tags **`Project`**, **`PyBulletPacker=golden-al2023`**); **`packer/scripts/provision-al2023.sh`** (NVIDIA for **g4dn/g5/g6**-class builder metadata, **GNOME**, **DCV**, **`/opt/pybullet-venv`**); post-provision **reboot** + sanity check in Packer.
-2. **OpenTofu**: **`infrastructure/packer.tf`** (**`null_resource`** **`local-exec`**, **`data.aws_ami`**, **`depends_on`** ordering); **`data.aws_subnets`** + **`local.packer_subnet_id`**; **`local.packer_ami_id_override`**; **`compute.tf`** passes **`ami_id`**.
+1. **Packer**: **`packer/pybullet-al2023.pkr.hcl`** (**amazon-ebs**, **AL2023**, **g5.xlarge** builder, **80 GiB** root, AMI tags **`Project`**, **`PyBulletPacker=golden-al2023`**); **manifest** + **`publish-ami-ssm.sh`** post-processors; **`packer/scripts/provision-al2023.sh`** (NVIDIA for **g4dn/g5/g6**-class builder metadata, **GNOME**, **pinned DCV 2025.0** + **SHA256**, **`/opt/pybullet-venv`**); post-provision **reboot** + sanity check.
+2. **OpenTofu**: **`infrastructure/packer.tf`** (**`null_resource`**, **`data.aws_ssm_parameter`**, **`depends_on`**); **`local.packer_golden_ami_ssm_parameter_name`**; **`data.aws_subnets`** + **`local.packer_subnet_id`**; **`local.packer_ami_id_override`**; **`compute.tf`** passes **`ami_id`** from **SSM** or override.
 3. **EC2 module**: required **`ami_id`**; default **empty `user_data`**; **`user_data.sh`** retained as **no-op** reference only; vanilla **AL2023 `data.aws_ami`** removed from module.
 4. **Removed**: **`infrastructure/ecr.tf`** (ECR + container push) and the **`docker/`** tree—**Packer** is the only image path.
 5. **Docs**: README **architecture** Mermaid diagrams, **Packer** runbook, **deploy** two-step flow, **troubleshooting** section 3 for golden AMI, **`.gitattributes`** for **LF** on **`*.tf`** / **`*.pkr.hcl`**, and **Install Packer on Linux or WSL** (zip + **`apt`**, **`packer validate`**, verified on **WSL2**).
@@ -209,19 +211,17 @@ The only supported runtime in this repo is the **Packer-built Amazon Linux 2023*
 
 ### Next (ordered)
 
-1. **Pin DCV tarball** (versioned URL or checksum verify in **`provision-al2023.sh`**) so Packer builds are reproducible.
-2. **Stable AMI pointer**: write **`ami-id`** to **SSM Parameter Store** (or a small manifest object) from **`packer build`** / post-processor and have OpenTofu read that instead of **“newest tag”** if you need stricter drift control.
-3. **Slim golden image**: optional “minimal GPU + PyBullet + DCV” variant vs full **Desktop** group to reduce AMI size and build time.
-4. **Automated smoke test**: SSM command or CI step that **`systemctl is-active dcvserver`** / **`curl -k https://localhost:8443/`** on a throwaway instance built from the new AMI before promoting tags.
+1. **Slim golden image**: optional “minimal GPU + PyBullet + DCV” variant vs full **Desktop** group to reduce AMI size and build time.
+2. **Automated smoke test**: SSM command or CI step that **`systemctl is-active dcvserver`** / **`curl -k https://localhost:8443/`** on a throwaway instance built from the new AMI before **`put-parameter`** (or before you rely on the new **SSM** value).
+3. **SSM hardening**: **`SecureString`** with **KMS**, or **IAM** conditions scoping **`ssm:PutParameter`** to CI role only.
 
-**Acceptance for item 1:** Two builds with the same inputs produce the same **DCV** and **PyBullet** versions (or a documented diff only when upstream metadata changes).
-
-**Acceptance for item 2:** Deleting stray test AMIs with the same tags does **not** cause OpenTofu to pick a random wrong image without **`tofu apply`** noticing (define the exact behaviour you want—in many cases **`data.aws_ami` most_recent** is still acceptable with tag discipline).
+**Done recently (was “Next”):** **DCV** is pinned to **`nice-dcv-2025.0-20103-amzn2023-x86_64.tgz`** with **SHA256** verification in **`provision-al2023.sh`**. The golden **AMI id** is written to **SSM** after each **`packer build`**; OpenTofu reads **`data.aws_ssm_parameter`** instead of **“newest tagged AMI”**.
 
 ### Reference files
 
-- **`packer/scripts/provision-al2023.sh`** — golden AMI install steps (successor to the old cloud-init bootstrap).
-- **`packer/pybullet-al2023.pkr.hcl`** — **amazon-ebs** builder, disk, tags, provisioners.
+- **`packer/scripts/provision-al2023.sh`** — golden AMI install steps (pinned **DCV** + **SHA256**).
+- **`packer/scripts/publish-ami-ssm.sh`** — post-build **SSM** publish (manifest → **`put-parameter`**).
+- **`packer/pybullet-al2023.pkr.hcl`** — **amazon-ebs** builder, disk, tags, provisioners, **manifest** + **shell-local** post-processors.
 - **`infrastructure/packer.tf`**, **`infrastructure/compute.tf`**, **`infrastructure/data.tf`**, **`infrastructure/local.tf`**, **`infrastructure/modules/ec2-instance/main.tf`** — OpenTofu and module wiring.
 - **`.gitattributes`** — line-ending policy for Terraform and Packer files.
 - **`README.md`** — this document (single source of documentation).
@@ -245,12 +245,13 @@ You need:
 - **OpenTofu** (`tofu` CLI). `.tf` files still declare **`terraform { … }`** for backend and settings—that keyword is **HCL syntax** shared with OpenTofu; run plans and applies with **`tofu`**, not **`terraform`**.
 - **AWS CLI v2**.
 - **Packer** (CLI) on the machine where you run **`tofu apply`**, so **`null_resource`** can execute **`packer build`**. Install it using [**Install Packer on Linux or WSL**](#install-packer-on-linux-or-wsl) below (official zip or **`apt`**). The HashiCorp overview is also at [Install Packer](https://developer.hashicorp.com/packer/install).
+- **Python 3** on that same machine (used by **`packer/scripts/publish-ami-ssm.sh`** after **`packer build`** to publish the AMI id to **SSM**).
 
 In **`infrastructure/local.tf`**, **`vpc_name`** must match your VPC **`Name`** tag in AWS. **`local.packer_ami_id_override`** may be set to an **`ami-…`** id to skip Packer during OpenTofu (see **Packer + OpenTofu (golden AMI)** earlier in this README). Correct the VPC tag in the EC2 VPC console if **`apply`** fails to find it.
 
 ### Install Packer on Linux or WSL
 
-These steps target **64-bit Linux** (including **WSL2**). They were verified on **WSL2 Ubuntu** with **Packer v1.15.3**: **`packer version`** prints the version, **`packer init`** installs the **Amazon** plugin, and **`packer validate`** (with **`-var`** values filled in for your VPC) prints **`The configuration is valid.`**
+These steps target **64-bit Linux** (including **WSL2**). They were verified on **WSL2 Ubuntu** with **Packer v1.15.3**: **`packer version`** prints the version, **`packer init`** installs the **Amazon** plugin, and **`packer validate`** (with **`-var`** for **VPC**, **subnet**, **`project_name`**, **`region`**, **`aws_cli_profile`**) prints **`The configuration is valid.`**
 
 #### Option A — Official zip (no `sudo` for the binary; good for WSL)
 
@@ -293,7 +294,7 @@ packer version
 
 #### Validate this repository’s Packer template
 
-From the **repository root**, after **`packer`** is on **`PATH`**, download plugins and check the template. You must pass **`-var`** for **`region`**, **`vpc_id`**, **`subnet_id`**, and **`project_name`** (same semantics as OpenTofu uses in **`infrastructure/packer.tf`**). Replace the VPC and subnet placeholders with real ids from the **AWS console** (same VPC as **`local.vpc_name`**, typically a **public** subnet used for the Packer builder):
+From the **repository root**, after **`packer`** is on **`PATH`**, download plugins and check the template. You must pass **`-var`** for **`region`**, **`vpc_id`**, **`subnet_id`**, **`project_name`**, and **`aws_cli_profile`** (same semantics as OpenTofu uses in **`infrastructure/packer.tf`**). Replace the VPC and subnet placeholders with real ids from the **AWS console** (same VPC as **`local.vpc_name`**, typically a **public** subnet used for the Packer builder):
 
 ```bash
 cd packer
@@ -303,10 +304,11 @@ packer validate \
   -var "vpc_id=vpc-0123456789abcdef0" \
   -var "subnet_id=subnet-0123456789abcdef0" \
   -var "project_name=aws-pybullet-environment" \
+  -var "aws_cli_profile=personal" \
   pybullet-al2023.pkr.hcl
 ```
 
-A successful run ends with **`The configuration is valid.`** A full **`packer build`** from the CLI uses the same variables; **`tofu apply`** supplies them automatically via **`null_resource`**.
+A successful run ends with **`The configuration is valid.`** A full **`packer build`** from the CLI uses the same variables; **`tofu apply`** supplies them automatically via **`null_resource`** (and runs **`publish-ami-ssm.sh`**, which needs **Python 3** on the apply host).
 
 ### Session Manager plugin for CLI SSM sessions
 
@@ -358,7 +360,7 @@ tofu init
 tofu plan
 ```
 
-If **`plan`** fails because **no golden AMI** exists yet ( **`data.aws_ami`** finds nothing), build the AMI first, then apply everything:
+If **`plan`** fails because the **SSM parameter** for the golden AMI id does not exist yet (**`ParameterNotFound`**), build the AMI first, then apply everything:
 
 ```bash
 tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]
@@ -375,7 +377,7 @@ tofu apply -auto-approve
 > Confirm **`provider.tf`** backend (bucket, key, **`profile`**, region) matches your account.
 
 > [!NOTE]
-> The **Packer** step can take **tens of minutes** ( **`dnf`**, **Desktop** group, **DCV** RPMs, **pip**, **reboot** on the temporary builder). The apply host must have the **`packer`** binary and network access to **AWS**.
+> The **Packer** step can take **tens of minutes** ( **`dnf`**, **Desktop** group, **DCV** RPMs, **pip**, **reboot** on the temporary builder). The apply host must have **`packer`**, **Python 3**, **AWS CLI**, network access to **AWS**, and IAM for **EC2** (builder) + **SSM** (golden AMI parameter), as under **Packer + OpenTofu (golden AMI)** and **Prerequisites**.
 
 ### Outputs and example commands
 
@@ -388,6 +390,7 @@ tofu output -raw pybullet_host_instance_id
 tofu output -raw pybullet_host_subnet_id
 tofu output -raw aws_region
 tofu output -raw pybullet_golden_ami_id
+tofu output -raw pybullet_golden_ami_ssm_parameter_name
 ```
 
 | Output | Use |
@@ -397,7 +400,8 @@ tofu output -raw pybullet_golden_ami_id
 | `pybullet_host_instance_id` | **SSM** target, EC2 console |
 | `pybullet_host_subnet_id` | Subnet id (routing / SSM troubleshooting) |
 | `aws_region` | Region string for **`--region`** |
-| `pybullet_golden_ami_id` | **AMI** id launched for the host (from Packer tags or **`local.packer_ami_id_override`**) |
+| `pybullet_golden_ami_id` | **AMI** id for the host (from **SSM** or **`local.packer_ami_id_override`**) |
+| `pybullet_golden_ami_ssm_parameter_name` | **SSM** path OpenTofu reads (written by **Packer**) |
 
 > [!NOTE]
 > **SSM** may take a few minutes after the instance is **Running**. There is **no** long cloud-init **`user_data`** install on first boot anymore; software was baked at **Packer** time. **`/var/log/packer-provision-pybullet.log`** on the instance (if present) records the **build** transcript, not each boot.

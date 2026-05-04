@@ -1,7 +1,10 @@
 locals {
   project_name = "aws-pybullet-environment"
 
-  # If non-null, skip Packer null_resource and data.aws_ami lookup; use this AMI for EC2.
+  # SSM String parameter written by Packer post-processor; OpenTofu reads it for module.ami_id.
+  packer_golden_ami_ssm_parameter_name = "/${local.project_name}/golden-ami-id"
+
+  # If non-null, skip Packer null_resource and SSM lookup; use this AMI for EC2.
   packer_ami_id_override = null
 
   # Subnet for Packer build instance (must reach internet). Same logic as ec2-instance module.
