@@ -36,4 +36,5 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
-infrastructure/.terraform.lock*
+.terraform.lock*
+*/.terraform.lock*
