@@ -88,6 +88,7 @@ flowchart TB
     SRC["source amazon-ebs AL2023 base"]
     SH["scripts/provision-al2023.sh"]
     RB["reboot provisioner"]
+    PP["post-processors: manifest + publish-ami-ssm.sh"]
   end
   subgraph net["Networking"]
     VPC["data.aws_vpc by Name tag"]
@@ -107,7 +108,8 @@ flowchart TB
   NR --> SRC
   SRC --> SH
   SH --> RB
-  RB --> DATA
+  RB --> PP
+  PP --> DATA
   DATA --> MOD
   MOD --> VPC
   MOD --> SG
@@ -124,11 +126,11 @@ flowchart TB
 | `packer/scripts/provision-al2023.sh` | Shell provisioner: **NVIDIA**, **GNOME**, **pinned DCV** tarball + **SHA256**, **`/opt/pybullet-venv`**. |
 | `packer/scripts/publish-ami-ssm.sh` | **Post-build**: read **Packer manifest**, **`aws ssm put-parameter`** golden AMI id. |
 | `infrastructure/packer.tf` | **`null_resource`** runs **`packer`**; **`data.aws_ssm_parameter`** reads **`local.packer_golden_ami_ssm_parameter_name`**. |
-| `.gitattributes` | Forces **LF** line endings for **`*.tf`** / **`*.pkr.hcl`** (avoids **`local-exec`** bash CRLF failures on Windows checkouts). |
+| `.gitattributes` | Forces **LF** line endings for **`*.tf`**, **`*.pkr.hcl`**, and **`packer/scripts/*.sh`** (avoids **`local-exec`** / Packer shell CRLF failures on Windows checkouts). |
 | `infrastructure/provider.tf` | AWS provider, **S3 backend** (OpenTofu remote state); align **`profile`** with your CLI profile. |
 | `infrastructure/local.tf` | **Instance** settings, **`packer_ami_id_override`**, **`allowed_ingress_cidrs`**, **`vpc_name`**, optional **`ec2_subnet_id`**, etc. |
 | `infrastructure/data.tf` | **`data.aws_vpc`**, **`data.aws_subnets`** (public `Name` filter), account/region. |
-| `infrastructure/compute.tf` | Wires the **ec2-instance** module with **`ami_id`** from Packer or override. |
+| `infrastructure/compute.tf` | Wires the **ec2-instance** module with **`ami_id`** from **SSM** (or **`local.packer_ami_id_override`**). |
 | `infrastructure/outputs.tf` | **Public IP**, instance id, **`pybullet_golden_ami_id`**, **`pybullet_golden_ami_ssm_parameter_name`**, **region**. |
 | `infrastructure/modules/ec2-instance` | IAM (SSM), security group, instance; **`user_data`** defaults to **empty**; legacy **`user_data.sh`** is a no-op reference. |
 | `src/` | Application and simulation code (to be expanded). |
@@ -149,7 +151,9 @@ From **`infrastructure/`**, **`null_resource.packer_pybullet_ami`** runs **`pack
 
 **State migration:** If an older revision of this repo had **`infrastructure/ecr.tf`** in state, **`tofu plan`** may propose **destroying** ECR resources—expected after the pivot. Review the plan before apply.
 
-**Line endings:** Keep **`*.tf`** and **`*.pkr.hcl`** as **LF** (see **`.gitattributes`**) so **`local-exec`** bash scripts are not corrupted by CRLF.
+**Line endings:** Keep **`*.tf`**, **`*.pkr.hcl`**, and **`packer/scripts/*.sh`** as **LF** (see **`.gitattributes`**) so **`local-exec`** and **Packer** shell steps are not corrupted by CRLF on Windows checkouts.
+
+**SSM parameter name:** **`publish-ami-ssm.sh`** writes **`/${PACKER_PROJECT}/golden-ami-id`** (same shape as **`local.packer_golden_ami_ssm_parameter_name`** in **`local.tf`**). **`PACKER_PROJECT`** comes from Packer’s **`project_name`** variable (must match **`local.project_name`**).
 
 After apply:
 
@@ -176,10 +180,12 @@ Search this file for these **exact** headings (outline / **Ctrl+F**):
 | **Repository layout** | Paths and file roles. |
 | **Packer + OpenTofu (golden AMI)** | Subnet rule, **SSM** parameter, **`packer_ami_id_override`**, IAM (**EC2** + **SSM**), cost, LF line endings. |
 | **Deploy the stack** | **`tofu init`**, optional **`-target`** first apply, **`tofu apply`**, outputs. |
-| **Prerequisites** | AWS profile, OpenTofu, AWS CLI, **`vpc_name`**. |
+| **Prerequisites** | AWS profile, OpenTofu, AWS CLI, **Packer**, **Python 3** (SSM publish), **`vpc_name`**, optional **`packer_ami_id_override`**. |
 | **Install Packer on Linux or WSL** | Zip or **`apt`** install, **`PATH`**, **`packer init`**, **`packer validate`**. |
 | **After deploy: NICE / Amazon DCV** | Ingress, SSM, **`ec2-user`** password, DCV web client, PyBullet checks. |
 | **Troubleshooting DCV HTTPS on port 8443** | IP, security group, **section 3** (golden AMI / **`dcvserver`**) checks. |
+| **Troubleshooting OpenTofu plan / apply** | **`ParameterNotFound`**, subnet / **`packer_subnet_id`**, **`packer_ami_id_override`**. |
+| **Troubleshooting SSM “Offline”** | VPC endpoints, subnet, IAM, instance reachability to **SSM** on **443**. |
 
 ### Status legend
 
@@ -197,7 +203,7 @@ The only supported runtime in this repo is the **Packer-built Amazon Linux 2023*
 2. **OpenTofu**: **`infrastructure/packer.tf`** (**`null_resource`**, **`data.aws_ssm_parameter`**, **`depends_on`**); **`local.packer_golden_ami_ssm_parameter_name`**; **`data.aws_subnets`** + **`local.packer_subnet_id`**; **`local.packer_ami_id_override`**; **`compute.tf`** passes **`ami_id`** from **SSM** or override.
 3. **EC2 module**: required **`ami_id`**; default **empty `user_data`**; **`user_data.sh`** retained as **no-op** reference only; vanilla **AL2023 `data.aws_ami`** removed from module.
 4. **Removed**: **`infrastructure/ecr.tf`** (ECR + container push) and the **`docker/`** tree—**Packer** is the only image path.
-5. **Docs**: README **architecture** Mermaid diagrams, **Packer** runbook, **deploy** two-step flow, **troubleshooting** section 3 for golden AMI, **`.gitattributes`** for **LF** on **`*.tf`** / **`*.pkr.hcl`**, and **Install Packer on Linux or WSL** (zip + **`apt`**, **`packer validate`**, verified on **WSL2**).
+5. **Docs**: README **architecture** Mermaid diagrams, **Packer** runbook, **deploy** two-step flow, **troubleshooting** (golden AMI, **OpenTofu** / **SSM** parameter, **SSM** agent), **`.gitattributes`** for **LF** on **`*.tf`**, **`*.pkr.hcl`**, and **`packer/scripts/*.sh`**, and **Install Packer on Linux or WSL** (zip + **`apt`**, **`packer validate`**, verified on **WSL2**).
 
 ### Not started
 
@@ -223,7 +229,7 @@ The only supported runtime in this repo is the **Packer-built Amazon Linux 2023*
 - **`packer/scripts/publish-ami-ssm.sh`** — post-build **SSM** publish (manifest → **`put-parameter`**).
 - **`packer/pybullet-al2023.pkr.hcl`** — **amazon-ebs** builder, disk, tags, provisioners, **manifest** + **shell-local** post-processors.
 - **`infrastructure/packer.tf`**, **`infrastructure/compute.tf`**, **`infrastructure/data.tf`**, **`infrastructure/local.tf`**, **`infrastructure/modules/ec2-instance/main.tf`** — OpenTofu and module wiring.
-- **`.gitattributes`** — line-ending policy for Terraform and Packer files.
+- **`.gitattributes`** — line-ending policy for Terraform, Packer HCL, and **`packer/scripts`** shell scripts.
 - **`README.md`** — this document (single source of documentation).
 
 ## Security: instance ingress
@@ -360,7 +366,7 @@ tofu init
 tofu plan
 ```
 
-If **`plan`** fails because the **SSM parameter** for the golden AMI id does not exist yet (**`ParameterNotFound`**), build the AMI first, then apply everything:
+If **`plan`** fails because the **SSM parameter** for the golden AMI id does not exist yet (**`ParameterNotFound`**), build the AMI first, then apply everything (see also **Troubleshooting OpenTofu plan and apply**):
 
 ```bash
 tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]
@@ -619,9 +625,9 @@ If **`journalctl -u gdm`** repeats **`GdmDisplay: Session never registered`** an
 
 On **GPU** instance types **without** NVIDIA kernel drivers loaded yet, **GDM+X** commonly fail exactly like this—the issue is **not** DCV **`8443`** or **your password**, it is **graphics bring-up**.
 
-**Current `user_data`** (for **`g4dn*`** / **`g5*`** / **`g6*`**) installs **[NVIDIA drivers on Amazon Linux 2023](https://docs.aws.amazon.com/linux/al2023/ug/nvidia-drivers.html)** (`nvidia-release`, `nvidia-driver-cuda`) **before** **`dnf groupinstall "Desktop"`** so **X/GDM** can start on first boot.
+**Golden AMI path (this repo):** **`packer/scripts/provision-al2023.sh`** installs **[NVIDIA drivers on Amazon Linux 2023](https://docs.aws.amazon.com/linux/al2023/ug/nvidia-drivers.html)** (`nvidia-release`, `nvidia-driver-cuda`) **before** **`dnf groupinstall "Desktop"`** during the **Packer** build. **EC2** launches with **empty `user_data`**—nothing re-runs that install on first boot. If you still see this pattern, the **AMI** may be bad, drivers may not have loaded after a kernel change, or you are on a **non-GPU** type (provisioner skips **NVIDIA** packages).
 
-**Already-running instance baked without that step** — install drivers over **SSM**, then **`reboot`**, then verify **`nvidia-smi`** shows the GPU:
+**Repair on a running instance** (drivers missing or never loaded): install over **SSM**, then **`reboot`**, then verify **`nvidia-smi`**:
 
 ```bash
 sudo dnf install -y "kernel-devel-$(uname -r)" "kernel-headers-$(uname -r)" gcc make
@@ -636,7 +642,7 @@ nvidia-smi
 
 Then retry DCV (**`pam_unix(dcv:auth): authentication failure`** in logs sometimes clears once **X** works; still ensure **`sudo passwd ec2-user`** matches what you type in DCV.)
 
-Or **`tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'`** so the refreshed **`user_data`** runs cleanly on a new instance.
+To pick up a **new** golden AMI after you fix **`provision-al2023.sh`** and **`tofu apply`** completes a **Packer** rebuild, run **`tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'`** (or destroy/recreate). **Replacing** the instance **without** a new AMI id only gives you another disk from the **same** image—it does **not** re-run **Packer** provisioning.
 
 > [!TIP]
 > For **browser-only** hangs (native client works), check **F12 → Network → WS**. If **both** clients fail, prioritize **`gdm`**/**X**/NVIDIA (**above**) before blaming **WebSockets** alone.
@@ -758,7 +764,23 @@ Connection refused
 
 If **`curl`** shows **`Connected`** but errors later (TLS/HTML), reopen **`https://<PUBLIC_IP>:8443`** in the browser—your path to **TCP 8443** is mostly fine.
 
-If **`curl`** cannot connect (**refused**, **timeout**), work through **sections 1–3** above (IP, security group, **`dcvserver`** / user-data).
+If **`curl`** cannot connect (**refused**, **timeout**), work through **sections 1–3** above (IP, security group, **`dcvserver`** / **GDM** / **NVIDIA**).
+
+---
+
+## Troubleshooting OpenTofu plan and apply
+
+### **`ParameterNotFound`** for the golden AMI id (**SSM**)
+
+**Symptom:** **`tofu plan`** or **`apply`** fails reading **`data.aws_ssm_parameter`** because **`/${project_name}/golden-ami-id`** does not exist yet.
+
+**Fix:** Run a one-off **`tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]`** (long **Packer** run), then a **full** **`tofu apply -auto-approve`**. Same flow is documented under **Deploy the stack**. Alternatively set **`local.packer_ami_id_override`** to an existing **`ami-…`** to skip **Packer** and the **SSM** read until you are ready.
+
+### **`Packer needs a subnet with internet access`** (**precondition**)
+
+**Symptom:** **`null_resource.packer_pybullet_ami`** precondition fails: **`local.packer_subnet_id`** is **null**.
+
+**Fix:** Set **`local.ec2_subnet_id`** in **`local.tf`** to a subnet id that has a route to the **internet** (for **Packer**’s temporary builder), **or** ensure at least one subnet in **`vpc_name`** has a **`Name`** tag matching **`*public*`** (see **`data.aws_subnets.public_in_vpc`** in **`data.tf`**).
 
 ---
 
@@ -777,6 +799,6 @@ aws sts get-caller-identity --profile personal
 ## Troubleshooting SSM “Offline”
 
 > [!WARNING]
-> The instance must reach **AWS Systems Manager** on **HTTPS (443)**. Typical issues: **no internet path** (private subnet without **NAT** or **SSM/VPC endpoints**), **wrong IAM** (this stack attaches **`AmazonSSMManagedInstanceCore`**), or **still booting** / user-data **not finished**.
+> The instance must reach **AWS Systems Manager** on **HTTPS (443)**. Typical issues: **no internet path** (private subnet without **NAT** or **SSM/VPC endpoints**), **wrong IAM** (this stack attaches **`AmazonSSMManagedInstanceCore`**), or **still booting** / **GDM** not ready yet. This stack uses **empty `user_data`** on the **golden AMI**—there is no long **cloud-init** bootstrap to wait for beyond normal OS boot.
 
 When **`ec2_subnet_id`** is **unset**, OpenTofu picks subnets whose **`tag:Name`** matches **`*public*`** inside **`vpc_name`**. In a **private-only** VPC, set **`ec2_subnet_id`** or add [SSM interface endpoints](https://docs.aws.amazon.com/systems-manager/latest/userguide/setup-create-vpc.html). See [SSM agent troubleshooting](https://docs.aws.amazon.com/systems-manager/latest/userguide/troubleshooting-ssm-agent.html).

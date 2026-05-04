@@ -1,3 +1,4 @@
 # HCL + bash local-exec scripts: CRLF breaks `set -o pipefail` in heredocs on Linux/WSL.
 *.tf text eol=lf
 *.pkr.hcl text eol=lf
+packer/scripts/*.sh text eol=lf
