@@ -28,7 +28,7 @@ flowchart TB
   subgraph iac["Infrastructure as code"]
     OT["OpenTofu in infrastructure/"]
     PK["packer.tf — null_resource packer build"]
-    SSM["data.aws_ssm_parameter — golden AMI id"]
+    SSMPARAM["data.aws_ssm_parameter — golden AMI id"]
   end
   subgraph net["VPC by Name tag"]
     SG["Security group: SSH, DCV"]
@@ -40,16 +40,16 @@ flowchart TB
     UD["user_data: empty"]
   end
   subgraph access["Access"]
-    SSM["IAM: SSM Session Manager"]
+    SSMIAM["IAM: SSM Session Manager"]
   end
   OT --> PK
-  PK --> SSM
+  PK --> SSMPARAM
   OT --> G5
   G5 --> GOLD
   G5 --> SG
   G5 --> SN
   G5 --> UD
-  G5 --> SSM
+  G5 --> SSMIAM
 ```
 
 ## Architecture (Packer golden AMI — overview)
