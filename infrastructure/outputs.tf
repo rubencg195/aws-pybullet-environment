@@ -18,7 +18,7 @@ output "pybullet_host_public_ip" {
 }
 
 output "pybullet_host_dcv_url" {
-  description = "NICE/Amazon DCV web client URL (click in Terraform Cloud / some terminals when shown as a link)"
+  description = "NICE/Amazon DCV web client URL (click in OpenTofu Cloud / some terminals when shown as a link)"
   value       = module.pybullet_host.public_ip != null ? "https://${module.pybullet_host.public_ip}:8443" : null
 }
 

@@ -2,7 +2,7 @@
 
 Infrastructure and tooling to run **PyBullet** physics simulation in **Amazon Web Services (AWS)**, so robotics and simulation work can be performed **remotely** from a **low-specification or portable client** (for example, a small laptop on Wi‑Fi) while the **GPU and CPU work** run on a **dedicated host in the cloud**. The goal is to separate **where you work** from **where the simulation runs**: a graphical desktop, DCV, and the PyBullet environment live on **EC2**; the client only needs a **browser** or the **NICE DCV** / **SSM** tooling.
 
-**What is deployed today** (see `infrastructure/`): a **GPU** EC2 instance (default type **`g4dn.2xlarge`**, set in `local.tf`), **Amazon Linux 2023**, **NICE/Amazon DCV** (HTTPS on **8443**), **SSM** (no password stored in Terraform), a **security group** with CIDRs from `local.tf`, first-boot **user data** (GNOME, DCV, PyBullet in `/opt/pybullet-venv`). The VPC is selected by the **`Name`** tag (`local.vpc_name` in `local.tf` → `data.aws_vpc` in `data.tf`).
+**What is deployed today** (see `infrastructure/`): a **GPU** EC2 instance (default type **`g4dn.2xlarge`**, set in `local.tf`), **Amazon Linux 2023**, **NICE/Amazon DCV** (HTTPS on **8443**), **SSM** (no password stored in OpenTofu configuration), a **security group** with CIDRs from `local.tf`, first-boot **user data** (GNOME, DCV, PyBullet in `/opt/pybullet-venv`). The VPC is selected by the **`Name`** tag (`local.vpc_name` in `local.tf` → `data.aws_vpc` in `data.tf`).
 
 ## Architecture (overview)
 
@@ -24,7 +24,7 @@ flowchart LR
 ```mermaid
 flowchart TB
   subgraph iac["Infrastructure as code"]
-    TF["Terraform in infrastructure/"]
+    OT["OpenTofu in infrastructure/"]
   end
   subgraph net["VPC by Name tag"]
     SG["Security group: SSH, DCV"]
@@ -38,7 +38,7 @@ flowchart TB
   subgraph access["Access"]
     SSM["IAM: SSM Session Manager"]
   end
-  TF --> G4
+  OT --> G4
   G4 --> AL2023
   G4 --> SG
   G4 --> SN
@@ -50,7 +50,7 @@ flowchart TB
 
 | Path | Purpose |
 |------|--------|
-| `infrastructure/provider.tf` | AWS provider, **S3 backend** (state); align **`profile`** with your CLI profile. |
+| `infrastructure/provider.tf` | AWS provider, **S3 backend** (OpenTofu remote state); align **`profile`** with your CLI profile. |
 | `infrastructure/local.tf` | **Instance** settings, **`allowed_ingress_cidrs`**, **`vpc_name`** (must match the VPC’s **`Name`** tag in EC2), optional **`ec2_subnet_id`** (else subnets with **`Name` *public* auto-picked), etc. |
 | `infrastructure/data.tf` | `data.aws_vpc` (by **`local.vpc_name`**) and account/region data. |
 | `infrastructure/compute.tf` | Wires the **ec2-instance** module. |
@@ -63,7 +63,7 @@ flowchart TB
 `infrastructure/local.tf` sets `allowed_ingress_cidrs`.
 
 > [!WARNING]
-> If **`allowed_ingress_cidrs`** is **empty**, Terraform uses **`0.0.0.0/0`**, so **any** public IPv4 can reach **TCP 22** (SSH) and **TCP 8443** (NICE DCV). Narrow this list for routine use—for example **`["YOUR.PUBLIC.IP/32"]`**—or use a VPN or bastion. **SSM** does **not** require exposing SSH globally; outbound HTTPS from the instance to AWS is usually enough once SSM networking is healthy.
+> If **`allowed_ingress_cidrs`** is **empty**, OpenTofu uses **`0.0.0.0/0`**, so **any** public IPv4 can reach **TCP 22** (SSH) and **TCP 8443** (NICE DCV). Narrow this list for routine use—for example **`["YOUR.PUBLIC.IP/32"]`**—or use a VPN or bastion. **SSM** does **not** require exposing SSH globally; outbound HTTPS from the instance to AWS is usually enough once SSM networking is healthy.
 
 ## Prerequisites
 
@@ -74,7 +74,7 @@ You need:
 > [!NOTE]
 > **`AWS_PROFILE`** and **`provider.tf`** **`profile`** should match **`personal`** unless you deliberately use another named profile everywhere.
 
-- **Terraform** (examples use **`terraform`**; substitute **`tofu`** if you use **OpenTofu**).
+- **OpenTofu** (`tofu` CLI). `.tf` files still declare **`terraform { … }`** for backend and settings—that keyword is **HCL syntax** shared with OpenTofu; run plans and applies with **`tofu`**, not **`terraform`**.
 - **AWS CLI v2**.
 
 In **`infrastructure/local.tf`**, **`vpc_name`** must match your VPC **`Name`** tag in AWS. Correct the tag in the EC2 VPC console if `apply` fails to find it.
@@ -125,15 +125,6 @@ Working directory (**contains `provider.tf` and backend config**):
 
 ```bash
 cd infrastructure
-terraform init
-terraform plan
-terraform apply -auto-approve
-```
-
-OpenTofu:
-
-```bash
-cd infrastructure
 tofu init
 tofu plan
 tofu apply -auto-approve
@@ -147,14 +138,12 @@ tofu apply -auto-approve
 Run these from **`infrastructure/`** after apply:
 
 ```bash
-terraform output -raw pybullet_host_dcv_url
-terraform output -raw pybullet_host_public_ip
-terraform output -raw pybullet_host_instance_id
-terraform output -raw pybullet_host_subnet_id
-terraform output -raw aws_region
+tofu output -raw pybullet_host_dcv_url
+tofu output -raw pybullet_host_public_ip
+tofu output -raw pybullet_host_instance_id
+tofu output -raw pybullet_host_subnet_id
+tofu output -raw aws_region
 ```
-
-Replace **`terraform`** with **`tofu`** if applicable.
 
 | Output | Use |
 |--------|-----|
@@ -188,8 +177,8 @@ You need a Session Manager shell **before** DCV (step 4) so you can set **`ec2-u
 ```bash
 cd infrastructure
 aws ssm start-session \
-  --target "$(terraform output -raw pybullet_host_instance_id)" \
-  --region "$(terraform output -raw aws_region)" \
+  --target "$(tofu output -raw pybullet_host_instance_id)" \
+  --region "$(tofu output -raw aws_region)" \
   --profile personal
 ```
 
@@ -222,7 +211,7 @@ DCV asks for a **desktop** login: **`ec2-user`** plus the **Linux password** on 
 > Run **`sudo passwd ec2-user`** only **on the EC2 instance**, in the **SSM** shell from step **2** (prompt like **`sh-5.2$`**, **`ssm-user@ip-…`**). If you run **`sudo passwd ec2-user`** in **WSL**, **PowerShell**, or **Terminal on your laptop**, **`sudo`** asks for **your local user’s** password (`[sudo] password for alice:`)—that is **not** changing **`ec2-user`** on AWS. Open **Session Manager** first, **then** run the command there.
 
 > [!NOTE]
-> That password is **not** in Terraform, Secrets Manager, or the console. The EC2 **SSH key pair** (`key_name`) is for **`ssh`**, **not** this DCV password.
+> That password is **not** in OpenTofu configuration, Secrets Manager, or the console. The EC2 **SSH key pair** (`key_name`) is for **`ssh`**, **not** this DCV password.
 
 In the **same** SSM session as step **2**, run:
 
@@ -251,15 +240,15 @@ Exiting session with sessionId: ...
 
 ### 4. Open the DCV web client
 
-Resolve the URL from **current** Terraform state (use this **IP**, not an old screenshot or cached tab):
+Resolve the URL from **current** OpenTofu state (use this **IP**, not an old screenshot or cached tab):
 
 ```bash
 cd infrastructure
-terraform output -raw pybullet_host_public_ip
+tofu output -raw pybullet_host_public_ip
 ```
 
 ```bash
-terraform output -raw pybullet_host_dcv_url
+tofu output -raw pybullet_host_dcv_url
 ```
 
 In the browser, open **`https://<PUBLIC_IP>:8443`** (HTTPS, port **8443**).
@@ -397,7 +386,7 @@ nvidia-smi
 
 Then retry DCV (**`pam_unix(dcv:auth): authentication failure`** in logs sometimes clears once **X** works; still ensure **`sudo passwd ec2-user`** matches what you type in DCV.)
 
-Or **`terraform apply -replace='module.pybullet_host.aws_instance.this'`** so the refreshed **`user_data`** runs cleanly on a new instance.
+Or **`tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'`** so the refreshed **`user_data`** runs cleanly on a new instance.
 
 > [!TIP]
 > For **browser-only** hangs (native client works), check **F12 → Network → WS**. If **both** clients fail, prioritize **`gdm`**/**X**/NVIDIA (**above**) before blaming **WebSockets** alone.
@@ -414,14 +403,14 @@ Or **`terraform apply -replace='module.pybullet_host.aws_instance.this'`** so th
 
 **Browser** messages such as **`This site can't be reached`**, **`Unable to connect`**, **`Connection timed out`**, or **`ERR_CONNECTION_REFUSED`** mean the TCP connection did not complete—not the usual “bad certificate” step.
 
-### 1) Confirm Terraform output matches what you browse
+### 1) Confirm OpenTofu output matches what you browse
 
 Stale tabs or IPs from an old stop/start confuse debugging.
 
 ```bash
 cd infrastructure
-terraform output -raw pybullet_host_public_ip
-terraform output -raw aws_region
+tofu output -raw pybullet_host_public_ip
+tofu output -raw aws_region
 ```
 
 Compare with the hostname in your browser (**must** be **`https://<that-ip>:8443`**).
@@ -518,24 +507,22 @@ If **`user-data-pyb.log`** ends before **`pip`**’s **`Successfully installed �
 If you see **`package curl-minimal`** **conflicting** with **`curl`**, **`dnf`** may have stopped before GNOME / DCV / PyBullet ran end-to-end (**`scripts-user`** / **`scripts in /var/lib/cloud/instance/scripts`** **failed** in **`cloud-init-output.log`**).
 
 > [!IMPORTANT]
-> **Reboot alone does not fix this.** EC2 **`User data`** runs **once** on **first boot** of a **given instance**. Later boots show **`Cloud-init`** finishing in seconds with **no** long **`scripts-user`** block—you are **not** re-applying **`user_data`**. Editing **`user_data.sh`** locally or in Git does nothing on-disk until Terraform **creates a new instance**.
+> **Reboot alone does not fix this.** EC2 **`User data`** runs **once** on **first boot** of a **given instance**. Later boots show **`Cloud-init`** finishing in seconds with **no** long **`scripts-user`** block—you are **not** re-applying **`user_data`**. Editing **`user_data.sh`** locally or in Git does nothing on-disk until OpenTofu **creates a new instance**.
 
 > [!WARNING]
-> Older revisions of **`user_data.sh`** explicitly installed the **`curl`** RPM, which clashes with **`curl-minimal`** on Amazon Linux 2023. **Pull the latest `infrastructure/modules/ec2-instance/user_data.sh`**, **`terraform apply`**, then **replace** the instance so bootstrap runs cleanly again (**`apply -replace`** below is the usual fix; AMI-only refresh does **not** replay **`User data`** on the **same** instance ID).
+> Older revisions of **`user_data.sh`** explicitly installed the **`curl`** RPM, which clashes with **`curl-minimal`** on Amazon Linux 2023. **Pull the latest `infrastructure/modules/ec2-instance/user_data.sh`**, **`tofu apply -auto-approve`**, then **replace** the instance so bootstrap runs cleanly again (**`apply -replace`** below is the usual fix; AMI-only refresh does **not** replay **`User data`** on the **same** instance ID).
 
 ```bash
 cd infrastructure
-terraform apply
-terraform apply -replace='module.pybullet_host.aws_instance.this'
+tofu apply -auto-approve
+tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'
 ```
-
-(Use **`tofu`** instead of **`terraform`** if applicable.)
 
 ---
 
 ### 4) Quick test from **your workstation** (not the browser)
 
-Uses **`curl`** toward **HTTPS :8443** on the instance. **Replace** **`PUBLIC_IP`** below with **`terraform output -raw pybullet_host_public_ip`**.
+Uses **`curl`** toward **HTTPS :8443** on the instance. **Replace** **`PUBLIC_IP`** below with **`tofu output -raw pybullet_host_public_ip`**.
 
 PowerShell (**Windows**, use **`curl.exe`** so you do **not** invoke **`Invoke-WebRequest`**):
 
@@ -563,7 +550,7 @@ Connection refused
 
 If **`curl`** shows **`Connected`** but errors later (TLS/HTML), reopen **`https://<PUBLIC_IP>:8443`** in the browser—your path to **TCP 8443** is mostly fine.
 
-If **`curl`** cannot connect (**refused**, **timeout**), work through **§1–3** above (IP, security group, **`dcvserver`** / user-data).
+If **`curl`** cannot connect (**refused**, **timeout**), work through **sections 1–3** above (IP, security group, **`dcvserver`** / user-data).
 
 ---
 
@@ -575,7 +562,7 @@ aws sts get-caller-identity --profile personal
 ```
 
 > [!NOTE]
-> **`terraform plan`** may show **no changes** when state matches the repo. A **replace** on the instance does **not** prove SSM or DCV are ready—confirm networking, IAM, and instance health separately.
+> **`tofu plan`** may show **no changes** when state matches the repo. A **replace** on the instance does **not** prove SSM or DCV are ready—confirm networking, IAM, and instance health separately.
 
 ---
 
@@ -584,4 +571,4 @@ aws sts get-caller-identity --profile personal
 > [!WARNING]
 > The instance must reach **AWS Systems Manager** on **HTTPS (443)**. Typical issues: **no internet path** (private subnet without **NAT** or **SSM/VPC endpoints**), **wrong IAM** (this stack attaches **`AmazonSSMManagedInstanceCore`**), or **still booting** / user-data **not finished**.
 
-When **`ec2_subnet_id`** is **unset**, Terraform picks subnets whose **`tag:Name`** matches **`*public*`** inside **`vpc_name`**. In a **private-only** VPC, set **`ec2_subnet_id`** or add [SSM interface endpoints](https://docs.aws.amazon.com/systems-manager/latest/userguide/setup-create-vpc.html). See [SSM agent troubleshooting](https://docs.aws.amazon.com/systems-manager/latest/userguide/troubleshooting-ssm-agent.html).
+When **`ec2_subnet_id`** is **unset**, OpenTofu picks subnets whose **`tag:Name`** matches **`*public*`** inside **`vpc_name`**. In a **private-only** VPC, set **`ec2_subnet_id`** or add [SSM interface endpoints](https://docs.aws.amazon.com/systems-manager/latest/userguide/setup-create-vpc.html). See [SSM agent troubleshooting](https://docs.aws.amazon.com/systems-manager/latest/userguide/troubleshooting-ssm-agent.html).
