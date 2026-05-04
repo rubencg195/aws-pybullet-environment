@@ -174,7 +174,8 @@ Search this file for these **exact** headings (outline / **Ctrl+F**):
 | **Repository layout** | Paths and file roles. |
 | **Packer + OpenTofu (golden AMI)** | Tags, subnet rule, **`packer_ami_id_override`**, IAM, cost, state migration, LF line endings. |
 | **Deploy the stack** | **`tofu init`**, optional **`-target`** first apply, **`tofu apply`**, outputs. |
-| **Prerequisites** | AWS profile, OpenTofu, AWS CLI, **Packer**, SSM plugin, **`vpc_name`**. |
+| **Prerequisites** | AWS profile, OpenTofu, AWS CLI, **`vpc_name`**. |
+| **Install Packer on Linux or WSL** | Zip or **`apt`** install, **`PATH`**, **`packer init`**, **`packer validate`**. |
 | **After deploy: NICE / Amazon DCV** | Ingress, SSM, **`ec2-user`** password, DCV web client, PyBullet checks. |
 | **Troubleshooting DCV HTTPS on port 8443** | IP, security group, **section 3** (golden AMI / **`dcvserver`**) checks. |
 
@@ -194,7 +195,7 @@ The only supported runtime in this repo is the **Packer-built Amazon Linux 2023*
 2. **OpenTofu**: **`infrastructure/packer.tf`** (**`null_resource`** **`local-exec`**, **`data.aws_ami`**, **`depends_on`** ordering); **`data.aws_subnets`** + **`local.packer_subnet_id`**; **`local.packer_ami_id_override`**; **`compute.tf`** passes **`ami_id`**.
 3. **EC2 module**: required **`ami_id`**; default **empty `user_data`**; **`user_data.sh`** retained as **no-op** reference only; vanilla **AL2023 `data.aws_ami`** removed from module.
 4. **Removed**: **`infrastructure/ecr.tf`** (ECR + container push) and the **`docker/`** tree—**Packer** is the only image path.
-5. **Docs**: README **architecture** Mermaid diagrams, **Packer** runbook, **deploy** two-step flow, **troubleshooting** section 3 for golden AMI, **`.gitattributes`** for **LF** on **`*.tf`** / **`*.pkr.hcl`**.
+5. **Docs**: README **architecture** Mermaid diagrams, **Packer** runbook, **deploy** two-step flow, **troubleshooting** section 3 for golden AMI, **`.gitattributes`** for **LF** on **`*.tf`** / **`*.pkr.hcl`**, and **Install Packer on Linux or WSL** (zip + **`apt`**, **`packer validate`**, verified on **WSL2**).
 
 ### Not started
 
@@ -243,9 +244,69 @@ You need:
 
 - **OpenTofu** (`tofu` CLI). `.tf` files still declare **`terraform { … }`** for backend and settings—that keyword is **HCL syntax** shared with OpenTofu; run plans and applies with **`tofu`**, not **`terraform`**.
 - **AWS CLI v2**.
-- **Packer** (CLI) on the machine where you run **`tofu apply`**, so **`null_resource`** can execute **`packer build`** ([install Packer](https://developer.hashicorp.com/packer/install)).
+- **Packer** (CLI) on the machine where you run **`tofu apply`**, so **`null_resource`** can execute **`packer build`**. Install it using [**Install Packer on Linux or WSL**](#install-packer-on-linux-or-wsl) below (official zip or **`apt`**). The HashiCorp overview is also at [Install Packer](https://developer.hashicorp.com/packer/install).
 
 In **`infrastructure/local.tf`**, **`vpc_name`** must match your VPC **`Name`** tag in AWS. **`local.packer_ami_id_override`** may be set to an **`ami-…`** id to skip Packer during OpenTofu (see **Packer + OpenTofu (golden AMI)** earlier in this README). Correct the VPC tag in the EC2 VPC console if **`apply`** fails to find it.
+
+### Install Packer on Linux or WSL
+
+These steps target **64-bit Linux** (including **WSL2**). They were verified on **WSL2 Ubuntu** with **Packer v1.15.3**: **`packer version`** prints the version, **`packer init`** installs the **Amazon** plugin, and **`packer validate`** (with **`-var`** values filled in for your VPC) prints **`The configuration is valid.`**
+
+#### Option A — Official zip (no `sudo` for the binary; good for WSL)
+
+Install under **`~/.local/bin`** (create the directory if it does not exist). Resolve the latest **Linux amd64** release version from HashiCorp’s checkpoint API, download the matching zip from **`releases.hashicorp.com`**, extract **`packer`**, and mark it executable:
+
+```bash
+mkdir -p ~/.local/bin
+PACKER_VER="$(curl -fsS 'https://checkpoint-api.hashicorp.com/v1/check/packer?arch=amd64&os=linux' | python3 -c "import sys,json; print(json.load(sys.stdin)['current_version'])")"
+cd /tmp
+curl -fsSLO "https://releases.hashicorp.com/packer/${PACKER_VER}/packer_${PACKER_VER}_linux_amd64.zip"
+unzip -o "packer_${PACKER_VER}_linux_amd64.zip" packer -d ~/.local/bin
+chmod +x ~/.local/bin/packer
+rm -f "packer_${PACKER_VER}_linux_amd64.zip"
+```
+
+Ensure **`~/.local/bin`** is on your **`PATH`** for every shell where you run **`tofu`** and **`packer`** (add once to **`~/.bashrc`** or **`~/.profile`**):
+
+```bash
+grep -q '.local/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+Verify:
+
+```bash
+packer version
+```
+
+#### Option B — `apt` repository (Debian / Ubuntu; requires `sudo`)
+
+Use HashiCorp’s **Linux package** instructions if you prefer a system package: [Linux Package Manager](https://developer.hashicorp.com/packer/install#linux-package-manager). Typical pattern (distribution codename must match your OS, for example **`noble`** on Ubuntu 24.04):
+
+```bash
+sudo apt-get update && sudo apt-get install -y gnupg software-properties-common curl
+curl -fsSL https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt-get update && sudo apt-get install -y packer
+packer version
+```
+
+#### Validate this repository’s Packer template
+
+From the **repository root**, after **`packer`** is on **`PATH`**, download plugins and check the template. You must pass **`-var`** for **`region`**, **`vpc_id`**, **`subnet_id`**, and **`project_name`** (same semantics as OpenTofu uses in **`infrastructure/packer.tf`**). Replace the VPC and subnet placeholders with real ids from the **AWS console** (same VPC as **`local.vpc_name`**, typically a **public** subnet used for the Packer builder):
+
+```bash
+cd packer
+packer init .
+packer validate \
+  -var "region=us-east-1" \
+  -var "vpc_id=vpc-0123456789abcdef0" \
+  -var "subnet_id=subnet-0123456789abcdef0" \
+  -var "project_name=aws-pybullet-environment" \
+  pybullet-al2023.pkr.hcl
+```
+
+A successful run ends with **`The configuration is valid.`** A full **`packer build`** from the CLI uses the same variables; **`tofu apply`** supplies them automatically via **`null_resource`**.
 
 ### Session Manager plugin for CLI SSM sessions
 
