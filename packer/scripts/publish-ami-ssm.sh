@@ -10,7 +10,7 @@ if [[ ! -f "$MAN" ]]; then
   exit 1
 fi
 AMI_ID="$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d['builds'][-1]['artifact_id'].split(':')[-1])" "$MAN")"
-NAME="/${PROJECT}/golden-ami-id"
+NAME="/pybullet/${PROJECT}/golden-ami-id"
 aws ssm put-parameter --name "$NAME" --value "$AMI_ID" --type String --overwrite --region "$REGION" >/dev/null
 rm -f "$MAN"
 echo "Published golden AMI ${AMI_ID} to SSM ${NAME}"

@@ -8,10 +8,14 @@ exec > >(tee /var/log/packer-provision-pybullet.log) 2>&1
 
 dnf -y update
 
-INSTANCE_TYPE="$(curl -fsS --max-time 2 http://169.254.169.254/latest/meta-data/instance-type || echo "")"
+IMDS_TOKEN="$(curl -fsS --max-time 2 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' http://169.254.169.254/latest/api/token || echo "")"
+INSTANCE_TYPE="$(curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/instance-type || echo "")"
+if [ -z "${INSTANCE_TYPE}" ]; then
+  echo "WARNING: Could not detect instance type via IMDS. NVIDIA driver install may be skipped."
+fi
 case "${INSTANCE_TYPE}" in
   g4dn*|g5*|g6*)
-    dnf -y install "kernel-devel-$(uname -r)" "kernel-headers-$(uname -r)" gcc make
+    dnf -y install kernel-devel kernel-headers gcc make
     dnf -y install nvidia-release
     dnf -y install nvidia-driver-cuda
     ;;
@@ -88,7 +92,10 @@ if ! grep -q 'pybullet-venv' /home/ec2-user/.bashrc 2>/dev/null; then
   echo "source ${VENV}/bin/activate" >> /home/ec2-user/.bashrc
 fi
 
-if [ -f /etc/dcv/dcv.conf ] && grep -qF '[session-management/automatic-console-session]' /etc/dcv/dcv.conf; then
+if [ -f /etc/dcv/dcv.conf ]; then
+  if ! grep -qF '[session-management/automatic-console-session]' /etc/dcv/dcv.conf; then
+    printf '\n[session-management/automatic-console-session]\n' >> /etc/dcv/dcv.conf
+  fi
   if ! grep -qF 'owner="ec2-user"' /etc/dcv/dcv.conf; then
     sed -i '/^\[session-management\/automatic-console-session\]/a owner="ec2-user"\nstorage-root="%home%"' /etc/dcv/dcv.conf
   fi

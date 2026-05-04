@@ -192,7 +192,7 @@ aws-pybullet-environment/
 
 The CLI profile needs:
 - **EC2**: `RunInstances`, `TerminateInstances`, `CreateImage`, `Describe*`, `CreateTags`, snapshot APIs (for Packer builder)
-- **SSM**: `PutParameter`, `GetParameter` on `arn:aws:ssm:REGION:ACCOUNT:parameter/aws-pybullet-environment/golden-ami-id`
+- **SSM**: `PutParameter`, `GetParameter` on `arn:aws:ssm:REGION:ACCOUNT:parameter/pybullet/aws-pybullet-environment/golden-ami-id`
 - Broad policies like `PowerUserAccess` or `AdministratorAccess` cover everything; for least privilege, scope to the EC2 build + SSM parameter ARNs.
 
 ### Install Packer on Linux or WSL

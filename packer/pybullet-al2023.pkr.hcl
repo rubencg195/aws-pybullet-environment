@@ -83,7 +83,8 @@ build {
   sources = ["amazon-ebs.pybullet_al2023"]
 
   provisioner "shell" {
-    script = "${path.root}/scripts/provision-al2023.sh"
+    script          = "${path.root}/scripts/provision-al2023.sh"
+    execute_command = "chmod +x {{ .Path }}; sudo {{ .Path }}"
   }
 
   provisioner "shell" {
