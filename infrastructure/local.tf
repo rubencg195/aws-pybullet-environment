@@ -5,7 +5,7 @@ locals {
   vpc_name = "default-vpc"
 
   ec2_key_name        = null
-  ec2_instance_type   = "g4dn.2xlarge"
+  ec2_instance_type   = "g5.xlarge"
   # Optional subnet id; if null, first subnet id (sorted) whose Name matches *public* for this VPC (see module data.aws_subnets.filtered).
   ec2_subnet_id = null
 

@@ -1,0 +1,8 @@
+**/.git
+**/.terraform
+**/*.tfstate*
+**/__pycache__
+**/.venv
+**/venv
+**/.idea
+**/.vscode

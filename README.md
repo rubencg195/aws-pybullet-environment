@@ -2,7 +2,9 @@
 
 Infrastructure and tooling to run **PyBullet** physics simulation in **Amazon Web Services (AWS)**, so robotics and simulation work can be performed **remotely** from a **low-specification or portable client** (for example, a small laptop on Wi‑Fi) while the **GPU and CPU work** run on a **dedicated host in the cloud**. The goal is to separate **where you work** from **where the simulation runs**: a graphical desktop, DCV, and the PyBullet environment live on **EC2**; the client only needs a **browser** or the **NICE DCV** / **SSM** tooling.
 
-**What is deployed today** (see `infrastructure/`): a **GPU** EC2 instance (default type **`g4dn.2xlarge`**, set in `local.tf`), **Amazon Linux 2023**, **NICE/Amazon DCV** (HTTPS on **8443**), **SSM** (no password stored in OpenTofu configuration), a **security group** with CIDRs from `local.tf`, first-boot **user data** (GNOME, DCV, PyBullet in `/opt/pybullet-venv`). The VPC is selected by the **`Name`** tag (`local.vpc_name` in `local.tf` → `data.aws_vpc` in `data.tf`).
+The repository is moving toward a **Docker image** (`docker/Dockerfile`) as the canonical PyBullet runtime (CUDA user-space, **Visual Studio Code**, optional **code-server**, **Amazon DCV** packages on **Ubuntu 22.04**), built and pushed to **ECR** from OpenTofu in a follow-up step. **Today**, OpenTofu still provisions **Amazon Linux 2023** and first-boot **user data** as in `infrastructure/modules/ec2-instance/user_data.sh`; the Docker path does not replace that flow until EC2 and user data are wired to the image.
+
+**What is deployed today** (see `infrastructure/`): a **GPU** EC2 instance (default type **`g5.xlarge`**, set in `local.tf`), **Amazon Linux 2023**, **NICE/Amazon DCV** (HTTPS on **8443**), **SSM** (no password stored in OpenTofu configuration), a **security group** with CIDRs from `local.tf`, first-boot **user data** (GNOME, DCV, PyBullet in `/opt/pybullet-venv`). The VPC is selected by the **`Name`** tag (`local.vpc_name` in `local.tf` → `data.aws_vpc` in `data.tf`).
 
 ## Architecture (overview)
 
@@ -13,7 +15,7 @@ flowchart LR
   end
   subgraph aws["AWS"]
     DCV["NICE DCV :8443"]
-    EC2["EC2 g4dn / PyBullet workload"]
+    EC2["EC2 g5 / PyBullet workload"]
   end
   B -->|TLS| DCV
   DCV --> EC2
@@ -33,23 +35,101 @@ flowchart TB
   subgraph compute["Compute"]
     AL2023["Amazon Linux 2023 AMI"]
     UD["user_data: Desktop + DCV + PyBullet venv"]
-    G4["Instance: g4dn.2xlarge (NVIDIA T4 class)"]
+    G5["Instance: g5.xlarge (NVIDIA A10G class)"]
   end
   subgraph access["Access"]
     SSM["IAM: SSM Session Manager"]
   end
-  OT --> G4
-  G4 --> AL2023
-  G4 --> SG
-  G4 --> SN
-  G4 --> UD
-  G4 --> SSM
+  OT --> G5
+  G5 --> AL2023
+  G5 --> SG
+  G5 --> SN
+  G5 --> UD
+  G5 --> SSM
+```
+
+## Architecture (Docker image and future ECR flow — overview)
+
+This is the **target** shape once the PyBullet host runs the container from **ECR** on **g5** (NVIDIA Container Toolkit on the instance). **ECR and EC2 user-data changes are not applied yet**; only the image definition exists under `docker/`.
+
+```mermaid
+flowchart LR
+  subgraph dev["Developer machine"]
+    DOCKER["docker build / tofu + local-exec (next)"]
+  end
+  subgraph aws["AWS"]
+    ECR["Amazon ECR (planned)"]
+    EC2["EC2 g5.xlarge"]
+    IMG["PyBullet + DCV + VS Code image"]
+  end
+  subgraph client["Client"]
+    DCVC["DCV client or browser :8443"]
+    WEB["Optional code-server :8080"]
+  end
+  DOCKER --> ECR
+  ECR --> EC2
+  EC2 --> IMG
+  DCVC --> EC2
+  WEB --> EC2
+```
+
+## Architecture (Docker image on GPU EC2 — detailed)
+
+```mermaid
+flowchart TB
+  subgraph iac["OpenTofu (infrastructure/)"]
+    OT["tofu apply -auto-approve"]
+    MOD["module ec2-instance"]
+  end
+  subgraph net["Networking"]
+    VPC["data.aws_vpc by Name tag"]
+    SG["Security group: SSH 22, DCV 8443"]
+    SN["Subnet: public or local.ec2_subnet_id"]
+  end
+  subgraph host["EC2 host (current: Amazon Linux 2023; future: Ubuntu + NVIDIA driver)"]
+    GPU["NVIDIA A10G — kernel driver on host"]
+    NCT["NVIDIA Container Toolkit (planned)"]
+    DOCK["containerd / Docker engine (planned)"]
+  end
+  subgraph image["Container image from docker/Dockerfile"]
+    BASE["nvidia/cuda 12.4.1 + cuDNN — Ubuntu 22.04 userland"]
+    PYB["/opt/pybullet-venv — pybullet, numpy, scipy, …"]
+    VSC["Microsoft VS Code .deb"]
+    CS["code-server — browser IDE"]
+    DCVP["Amazon DCV .debs — server, web viewer, xdcv, dcv-gl"]
+    XFCE["XFCE — desktop for DCV virtual sessions"]
+  end
+  subgraph ports["Ports (typical)"]
+    P8443["8443 TCP — DCV HTTPS"]
+    P8080["8080 TCP — code-server (optional)"]
+  end
+  subgraph access["Access"]
+    SSM["SSM Session Manager"]
+  end
+  OT --> MOD
+  MOD --> VPC
+  MOD --> SG
+  MOD --> SN
+  MOD --> GPU
+  GPU --> NCT
+  NCT --> DOCK
+  DOCK --> image
+  BASE --> PYB
+  BASE --> VSC
+  BASE --> CS
+  BASE --> DCVP
+  BASE --> XFCE
+  image --> P8443
+  image --> P8080
+  MOD --> SSM
 ```
 
 ## Repository layout
 
 | Path | Purpose |
 |------|--------|
+| `docker/Dockerfile` | **PyBullet GPU image**: CUDA user-space on Ubuntu 22.04, PyBullet venv, **VS Code**, **code-server**, **Amazon DCV** + XFCE stack; see [PyBullet Docker image](#pybullet-docker-image) and [TO-DO](#to-do). |
+| `docker/entrypoint.sh` | Container entry: default shell, or `START_CODE_SERVER=1` for code-server. |
 | `infrastructure/provider.tf` | AWS provider, **S3 backend** (OpenTofu remote state); align **`profile`** with your CLI profile. |
 | `infrastructure/local.tf` | **Instance** settings, **`allowed_ingress_cidrs`**, **`vpc_name`** (must match the VPC’s **`Name`** tag in EC2), optional **`ec2_subnet_id`** (else subnets with **`Name` *public* auto-picked), etc. |
 | `infrastructure/data.tf` | `data.aws_vpc` (by **`local.vpc_name`**) and account/region data. |
@@ -57,6 +137,132 @@ flowchart TB
 | `infrastructure/outputs.tf` | **Public IP**, instance id, **region** (SSM/CLI helpers). |
 | `infrastructure/modules/ec2-instance` | IAM (SSM), security group, instance, `user_data.sh` |
 | `src/` | Application and simulation code (to be expanded). |
+
+## PyBullet Docker image
+
+The image is based on **`nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04`**: it ships **CUDA libraries and cuDNN in user space**; the **NVIDIA kernel driver** must exist on the **host** (for example an **NVIDIA GPU-optimized AMI** or a manually installed driver on **Ubuntu**). On **EC2 g5.xlarge**, run the container with **`--gpus all`** after installing the **NVIDIA Container Toolkit** on the instance. Keep the image CUDA line within the range your host driver supports ([CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/index.html)).
+
+What is inside the image:
+
+- **`/opt/pybullet-venv`** — PyBullet, NumPy, SciPy, Pillow, Matplotlib (same stack as the old user-data venv path conceptually).
+- **Visual Studio Code** (`code`) — GUI when a display is available (for example under **DCV** on the host desktop, or X11 forwarding).
+- **code-server** — VS Code–compatible **browser** editor; start with **`START_CODE_SERVER=1`** (set **`PASSWORD`** for the login prompt unless you change auth).
+- **Amazon DCV** (server, web viewer, **xdcv**, **dcv-gl**) and **XFCE** — for **virtual sessions** once the container is run like a full VM (often **`--privileged`**, cgroup, and **dbus** on the host); production setups commonly run **DCV on the EC2 host** and use the container only for **CUDA + PyBullet**, which is simpler to operate.
+
+Build (from the repository root; requires Docker):
+
+```bash
+docker build -t pybullet-dcv:dev -f docker/Dockerfile docker/
+```
+
+Smoke test (**GPU optional** for import + `DIRECT`):
+
+```bash
+docker run --rm -it pybullet-dcv:dev bash -lc "python -c \"import pybullet as p; c=p.connect(p.DIRECT); print('ok', c); p.disconnect()\""
+```
+
+With an NVIDIA GPU and the Container Toolkit on Linux:
+
+```bash
+docker run --rm -it --gpus all pybullet-dcv:dev bash -lc "nvidia-smi && python -c \"import pybullet as p; print('pybullet', p.__version__)\""
+```
+
+Optional **code-server** (bind **8080**; add **8080/tcp** to the security group when you expose it from EC2):
+
+```bash
+docker run --rm -it -p 8080:8080 -e START_CODE_SERVER=1 -e PASSWORD=changeme pybullet-dcv:dev
+```
+
+## TO-DO
+
+Roadmap and status for the **Docker image**, **ECR**, and **EC2** integration. Link: `#to-do`.
+
+### `user_data.sh` vs `docker/Dockerfile`
+
+OpenTofu still provisions **Amazon Linux 2023** and runs **`infrastructure/modules/ec2-instance/user_data.sh` on the EC2 host**. The **Dockerfile** builds an **Ubuntu 22.04**-based **container** image. They are **not** the same operating system; packages and DCV archives **must** differ. Nothing is “wrong” solely because paths use `dnf` vs `apt` or `amzn2023` vs `ubuntu2204`.
+
+| Concern | `user_data.sh` (AL2023 **host**) | `docker/Dockerfile` (**container**) | Parity / gap |
+|--------|-----------------------------------|--------------------------------------|----------------|
+| Package manager | `dnf` / `dnf groupinstall` | `apt-get` | Expected OS difference |
+| NVIDIA kernel driver | Installs `nvidia-release`, `nvidia-driver-cuda` for `g4dn*`, `g5*`, `g6*` | **Not** in image; host (or GPU AMI) must provide driver for `--gpus all` | **By design**; CUDA image carries user-space libraries only |
+| Desktop / session | GNOME “Desktop” group, **GDM**, `WaylandEnable=false`, graphical target | **XFCE** + dbus-x11 (lighter; geared toward DCV **virtual** sessions) | **Not equivalent** to full GNOME console session; future host may still need GDM/GNOME **on the EC2 OS** if you rely on DCV **automatic console** like today |
+| DCV distribution | `nice-dcv-amzn2023-x86_64.tgz` RPMs | `nice-dcv-ubuntu2204-x86_64.tgz` DEBs | **Correct** per platform; do **not** swap tarball names between host and container |
+| DCV GL / virtual | `nice-dcv-gl`, `nice-xdcv` RPMs | `nice-dcv-gl`, `nice-xdcv` DEBs | Aligned feature set |
+| `dcv.conf` | Patches **automatic-console-session** `owner="ec2-user"` (AL2023 + DCV pattern) | **Not** patched; defaults depend on DCV package; container has no **`ec2-user`** | **Gap** if you run DCV **inside** this container and need the same console-owner behavior; **no gap** if DCV stays on the **host** and the container only runs PyBullet/CUDA |
+| PyBullet | `/opt/pybullet-venv`, pip: numpy, scipy, pybullet, Pillow, matplotlib | Same path and **same pip set** | **Aligned** |
+| VS Code / browser IDE | Not in user_data | `code` (Microsoft) + **code-server** | Intentional **extension** in the image |
+| User / ownership | `chown ec2-user`, `.bashrc` auto-activate venv | No `ec2-user`; venv owned by root unless a follow-up `USER`/`chown` layer is added | **Gap** only when mapping Linux users for DCV or bind-mounted home |
+| Firewall | `firewalld` port **8443** if active | Use Docker / EC2 **security groups** for published ports | Different layer; open **8080** if exposing code-server |
+
+**Conclusion:** The Dockerfile is **set up consistently** with the **intent** of the old bootstrap (PyBullet venv + DCV-capable stack + GPU-friendly GL) for an **Ubuntu-based container**. It is **not** a line-for-line duplicate of Amazon Linux **host** user data. The next infrastructure step is to decide **where DCV runs** (host vs container) and align **AMI OS**, **user_data**, and **ECR pull** accordingly.
+
+### Done
+
+1. **Repository layout**: Added **`docker/Dockerfile`**, **`docker/entrypoint.sh`**, **`docker/.dockerignore`**.
+2. **Base image**: `nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04` with **PATH** including **`/opt/pybullet-venv/bin`**.
+3. **PyBullet environment**: Python venv at **`/opt/pybullet-venv`** with **`numpy>=1.22`**, **scipy**, **pybullet**, **Pillow**, **matplotlib** (matches **`user_data.sh`** pip list).
+4. **Editors**: Microsoft **VS Code** (`code`); **code-server** (pinned **`CODE_SERVER_VERSION`**) with **`START_CODE_SERVER=1`** in **`docker/entrypoint.sh`**; **`PASSWORD`** env for password auth.
+5. **DCV in image**: Ubuntu 22.04 **DEB** tarball from CloudFront (**server**, **web-viewer**, **xdcv**, **dcv-gl**); **XFCE** for a desktop stack inside the image.
+6. **Process init**: **`tini`** as PID 1; **`policy-rc.d`** only during image build for apt postinst scripts.
+7. **Documentation**: **README** updated with Docker-centric **architecture** Mermaid diagrams, **PyBullet Docker image** build/run examples, intro note that **ECR wiring is not done yet**.
+8. **OpenTofu default instance type**: **`infrastructure/local.tf`** sets **`ec2_instance_type`** to **`g5.xlarge`** (still **AL2023** AMI + existing **`user_data.sh`** until you change the module).
+
+### Not started
+
+1. **No ECR repository** or **`local-exec`** build/push in OpenTofu.
+2. **No change** to **`data.aws_ami`** / **`aws_instance`** to use **Ubuntu** or a **GPU-optimized AMI** for the PyBullet host.
+3. **No replacement** of **`user_data.sh`** with “Docker + ECR only” bootstrap; **AL2023** still installs GNOME, DCV, and a **second** PyBullet venv on the host (duplicate of container until you remove or slim host install).
+4. **No security group** rule for **TCP 8080** (code-server) unless added manually later.
+5. **No IAM** for EC2 instance role to **`ecr:GetAuthorizationToken`**, **`ecr:BatchGetImage`**, **`ecr:GetDownloadUrlForLayer`**, etc., for pull from ECR.
+
+### Next (ordered)
+
+#### Phase A — ECR + `local-exec`
+
+1. **Decide region and naming**: ECR repository name (for example **`aws-pybullet-environment/pybullet-dcv`** or project-prefixed), image tag strategy (**`latest`** vs **`git sha`**).
+2. **Add OpenTofu resources** (new file such as **`infrastructure/ecr.tf`** or under a small module):
+   - **`aws_ecr_repository`** for the PyBullet image.
+   - Optional **`aws_ecr_lifecycle_policy`** (expire untagged / old images) to control cost.
+3. **IAM for push** (pick one pattern):
+   - **Developer machine / CI**: ensure the profile used by **`local-exec`** can **`ecr:PutImage`**, **`ecr:InitiateLayerUpload`**, **`ecr:UploadLayerPart`**, **`ecr:CompleteLayerUpload`**, **`ecr:BatchCheckLayerAvailability`**, **`ecr:GetAuthorizationToken`** (often via **`AmazonEC2ContainerRegistryPowerUser`** or a tighter custom policy).
+   - Document that **`tofu apply`** must run where **Docker** can build **Linux/amd64** images (native Linux, **WSL2**, or **buildx** with a Linux builder); raw **Windows** PowerShell without Docker/WSL may fail.
+4. **`null_resource` + `local-exec`** (user preference: **OpenTofu** + **`-auto-approve`**):
+   - **`aws ecr get-login-password`** piped to **`docker login`** (non-interactive).
+   - **`docker build`** with **`-f docker/Dockerfile`** and context **`docker/`** (same as README).
+   - **`docker tag`** and **`docker push`** to **`${aws_ecr_repository.this.repository_url}:tag`**.
+5. **Triggers**: Use **`timestamp()`** only if you accept rebuild every apply; prefer **`sha256(file(...))`** on **`docker/Dockerfile`** + **`docker/entrypoint.sh`** + any install script so apply rebuilds only when sources change.
+6. **Outputs**: Add **`tofu output`** for **ECR repository URL** and **pushed image URI** for copy-paste into EC2 user data or systemd units.
+7. **README**: Extend the Docker section with “**Push from OpenTofu**” commands and prerequisites (**Docker**, **AWS CLI**, profile).
+
+**Acceptance criteria (Phase A):** After **`cd infrastructure && tofu apply -auto-approve`**, the image appears in **ECR** in the correct account/region and can be **`docker pull`**’d after login.
+
+#### Phase B — EC2 consumes the image (after Phase A)
+
+1. **Switch AMI** to **Ubuntu 22.04** or **AWS Deep Learning GPU AMI** / **NVIDIA-optimized AMI** that matches the **CUDA 12.4** line in the Dockerfile (watch **driver ↔ CUDA compatibility**).
+2. **Rewrite or slim `user_data.sh`** for the new OS:
+   - Install **Docker Engine** + **NVIDIA Container Toolkit**.
+   - **`docker pull`** the ECR image (needs **instance IAM** for ECR pull + **`aws ecr get-login-password`** on the instance or use **`credential_helper`** / **IAM**-based pull patterns).
+   - Optionally **stop** installing a full duplicate PyBullet venv on the host if the container is canonical.
+3. **DCV decision**:
+   - **Option 1 (simpler):** DCV + GNOME/GDM **on the Ubuntu host** (similar mental model to today’s AL2023); container only for **`docker run --gpus all`** PyBullet jobs.
+   - **Option 2 (harder):** Run DCV **inside** the container; then implement **`dcv.conf`** owner, **privileged**/cgroup behavior, and document **8443** publishing — align with the **`dcv.conf`** gap table above.
+4. **Security group**: Add **8080** if code-server is exposed; keep **8443** for DCV.
+5. **README**: Replace or narrow **Amazon Linux 2023**-specific DCV instructions (**`ec2-user`**, **`dnf`**) where the host becomes Ubuntu (**`ubuntu`** user, **`apt`**).
+
+**Acceptance criteria (Phase B):** From a client, **DCV** (and/or **code-server**) works; **`docker run --gpus all …`** runs **`nvidia-smi`** and the PyBullet smoke test inside the pulled image.
+
+#### Phase C — Hardening and cleanup
+
+1. Remove or gate **duplicate** PyBullet installs (host venv vs container) to shorten boot and avoid version skew.
+2. Pin **DCV tarball** to a versioned URL if **`latest` symlinks** cause non-reproducible builds.
+3. **Secrets**: Do not bake **ECR** or **code-server** passwords into OpenTofu state; use **SSM Parameter Store** or env from CI.
+
+### Reference files
+
+- **`infrastructure/modules/ec2-instance/user_data.sh`** — current production bootstrap.
+- **`docker/Dockerfile`**, **`docker/entrypoint.sh`** — image definition and runtime switches.
+- **`infrastructure/local.tf`**, **`infrastructure/compute.tf`**, **`infrastructure/modules/ec2-instance/main.tf`** — how the instance is wired today.
+- **`README.md`** — **PyBullet Docker image** (above) and **TO-DO** (this section).
 
 ## Security: instance ingress
 
