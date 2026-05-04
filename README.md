@@ -4,7 +4,7 @@ Infrastructure and tooling to run **PyBullet** physics simulation in **Amazon We
 
 **Production path:** **HashiCorp Packer** bakes **Amazon Linux 2023** with **NVIDIA drivers** (on **g4dn** / **g5** / **g6**-class builders), **GNOME**, **NICE/Amazon DCV** (pinned **DCV 2025.0** tarball + **SHA256** check), and **`/opt/pybullet-venv`** into a **golden AMI**. **`packer build`** finishes with a **manifest** + **`shell-local`** step that writes the new **AMI id** to **SSM Parameter Store** (path **`/aws-pybullet-environment/golden-ami-id`**, from **`local.project_name`** in **`local.tf`**). **OpenTofu** reads **`data.aws_ssm_parameter`** and launches **EC2** with **empty `user_data`**.
 
-**What is deployed today** (see `infrastructure/`): **`null_resource`** runs **Packer** (requires **Packer CLI**, **Python 3**, **AWS CLI**, and IAM including **`ssm:PutParameter`** / **`ssm:GetParameter`** on that parameter path). The **ec2-instance** module uses the **SSM** value (or **`local.packer_ami_id_override`**) as **`ami_id`**. Default instance type **`g5.xlarge`**, **SSM** for the instance, **DCV :8443**, ingress from **`local.allowed_ingress_cidrs`**, VPC from **`local.vpc_name`**.
+**What is deployed today** (see `infrastructure/`): **`null_resource`** runs **Packer** (requires **Packer CLI**, **Python 3**, **AWS CLI**, and IAM including **`ssm:PutParameter`** / **`ssm:GetParameter`** on that parameter path). The **ec2-instance** module uses the **SSM** value (or **`local.packer_ami_id_override`**) as **`ami_id`**. Default instance type **`g5.xlarge`**, **SSM** for the instance, **DCV :8443**, ingress from **`local.allowed_ingress_cidrs`**, VPC from **`local.vpc_name`**. The baked OS is **Amazon Linux 2023** (not **Ubuntu**); **VS Code** is not installed—see **Agent handoff: current state → target workload host** for the path to **Ubuntu**, **VS Code**, and full acceptance criteria.
 
 ## Architecture (overview)
 
@@ -135,6 +135,163 @@ flowchart TB
 | `infrastructure/modules/ec2-instance` | IAM (SSM), security group, instance; **`user_data`** defaults to **empty**; legacy **`user_data.sh`** is a no-op reference. |
 | `src/` | Application and simulation code (to be expanded). |
 
+## Agent handoff: current state → target workload host
+
+Use this section when **handing the repo to another engineer or AI agent**. It states **exactly what is implemented today** (verified against the tree), **what “done” means for the product you described**, and **ordered work** to reach **Ubuntu**, **NICE DCV**, **PyBullet**, **VS Code**, and a **GPU-backed** remote desktop suitable for simulation.
+
+### 1. Who should read this
+
+Anyone implementing **OS migration (AL2023 → Ubuntu)**, **VS Code**, or **production hardening** without re-deriving requirements from scattered README sections.
+
+### 2. Target definition (acceptance criteria)
+
+Treat the stack as **done for your product** when **all** of the following are true:
+
+| # | Requirement | Notes |
+|---|-------------|--------|
+| T1 | **Ubuntu LTS** on the golden AMI and on the running **EC2** instance | Today the repo bakes **Amazon Linux 2023** only—Ubuntu is **out of scope** of current Packer sources. |
+| T2 | **GPU** available in the guest for CUDA/OpenGL paths you care about | Today: **NVIDIA** packages on **g4dn** / **g5** / **g6**-class **Packer** builders and matching **`local.ec2_instance_type`**. |
+| T3 | **NICE DCV** reachable at **`https://<public-ip>:8443`** with a **console session** | Today: **DCV 2025.0** pinned tarball + **SHA256** in **`packer/scripts/provision-al2023.sh`**; **`dcv.conf`** automatic console owner **`ec2-user`**. |
+| T4 | **PyBullet** import and **DIRECT** smoke test in the baked venv | Today: **`/opt/pybullet-venv`** with **`pybullet`**, **numpy**, **scipy**, **Pillow**, **matplotlib**; **`ec2-user`** **`.bashrc`** sources the venv. |
+| T5 | **VS Code** usable from the remote environment | **Not implemented.** Choose **desktop VS Code** inside GNOME (`.deb` / repo) vs **`code-server`** in browser (needs **SG** ingress, e.g. **TCP 8080**—see **Not started** in **TO-DO**). |
+| T6 | **OpenTofu** provisions **one** PyBullet host from **SSM-stored golden AMI id** (or override) | Today: **`infrastructure/compute.tf`** → **`module "pybullet_host"`**; **`data.aws_ssm_parameter`** in **`infrastructure/packer.tf`**; **`local.packer_ami_id_override`** in **`infrastructure/local.tf`**. |
+| T7 | **SSM Session Manager** works for break-glass shell | Today: **`AmazonSSMManagedInstanceCore`** on the instance profile in **`infrastructure/modules/ec2-instance/iam.tf`**. |
+| T8 | **Security group** allows your client to **SSH :22** and **DCV :8443** | Today: **`infrastructure/modules/ec2-instance/sg.tf`**; CIDRs from **`local.sg_ingress_cidrs`** (**`local.allowed_ingress_cidrs`** in **`local.tf`**, defaulting to **`0.0.0.0/0`** when empty). |
+
+**DCV login user today:** **`ec2-user`** (set password with **`sudo passwd ec2-user`** over **SSM**). Any **Ubuntu** migration must switch documentation and **`dcv.conf`** ownership to the Ubuntu default user (**`ubuntu`**) consistently across **README**, **`provision-*.sh`**, and **“After deploy”** steps.
+
+### 3. Current implementation inventory (already done)
+
+#### 3.1 Infrastructure as code (OpenTofu)
+
+| Item | Location | Behavior |
+|------|----------|----------|
+| VPC selection | **`infrastructure/local.tf`** **`vpc_name`**, **`infrastructure/data.tf`** **`data.aws_vpc.this`** | VPC must exist with matching **`Name`** tag. |
+| Public subnet heuristic | **`data.tf`** **`data.aws_subnets.public_in_vpc`**, **`local.packer_subnet_id`**, module **`data.tf`** | Subnets need **`tag:Name`** matching **`*public*`** unless **`local.ec2_subnet_id`** is set. |
+| Packer driver | **`infrastructure/packer.tf`** **`null_resource.packer_pybullet_ami`** | **`local-exec`**: **`packer init`**, **`packer validate`**, **`packer build`** with **`-var`** for region, VPC, subnet, **`project_name`**, **`aws_cli_profile`**. Skipped when **`local.packer_ami_id_override`** is non-null (**`count = 0`**). |
+| Golden AMI id | **`data.aws_ssm_parameter.golden_ami_id`**, name **`local.packer_golden_ami_ssm_parameter_name`** | **`depends_on`** **`null_resource`** so first read follows publish. |
+| EC2 module | **`infrastructure/compute.tf`**, **`infrastructure/modules/ec2-instance/`** | **`ami_id`** from **SSM** or override; **`user_data`** default **empty**; **IMDSv2** required; **80 GiB** encrypted **gp3** root; **public IPv4** on instance. |
+| Security group | **`modules/ec2-instance/sg.tf`** | **TCP 22**, **TCP 8443** ingress only (no **8080** yet). |
+| Outputs | **`infrastructure/outputs.tf`** | **`pybullet_host_dcv_url`**, **`pybullet_host_public_ip`**, **`pybullet_golden_ami_id`**, **`pybullet_golden_ami_ssm_parameter_name`**, etc. |
+
+#### 3.2 Packer golden AMI (Amazon Linux 2023 today)
+
+| Item | Location | Behavior |
+|------|----------|----------|
+| Builder | **`packer/pybullet-al2023.pkr.hcl`** **`source "amazon-ebs" "pybullet_al2023"`** | **AL2023** latest via **`source_ami_filter`** **`al2023-ami-*`**, **`ssh_username` = `ec2-user`**, **`g5.xlarge`** default **`builder_instance_type`**, **80 GiB** **`/dev/xvda`**. |
+| Provision | **`packer/scripts/provision-al2023.sh`** | **`dnf`**: **`Desktop`** group, conditional **NVIDIA** on **g4dn/g5/g6**, pinned **DCV** **`.tgz`** + **`sha256sum -c`**, **`dnf install`** DCV RPMs, **`/opt/pybullet-venv`** **`pip`**, **`dcv.conf`** tweaks, **`dcvserver`** + **`gdm`**. |
+| Reboot + sanity | **`pybullet-al2023.pkr.hcl`** provisioners | Reboot then **`test -d /opt/pybullet-venv`**. |
+| SSM publish | **`packer/scripts/publish-ami-ssm.sh`**, **manifest** + **shell-local** | **`aws ssm put-parameter`** **`/${project_name}/golden-ami-id`**, **`String`**, **`--overwrite`**; manifest deleted after publish. Requires **`AWS_PROFILE`**, **`AWS_REGION`**, **`python3`** on **apply host**. |
+
+#### 3.3 Documentation and repo hygiene
+
+| Item | Location |
+|------|----------|
+| Single-doc policy | This **`README.md`** only (no other `*.md` doc files for product docs). |
+| Line endings | **`.gitattributes`**: **`*.tf`**, **`*.pkr.hcl`**, **`packer/scripts/*.sh`** → **LF**. |
+| Troubleshooting | **Troubleshooting DCV HTTPS**, **Troubleshooting OpenTofu plan and apply**, **Troubleshooting SSM “Offline”** in this file. |
+
+### 4. Gap analysis (target §2 vs repository today)
+
+| Target row | Gap | Concrete next work |
+|------------|-----|---------------------|
+| **T1 Ubuntu** | Packer uses **AL2023** filter and **`ec2-user`** | Add **`ubuntu-22.04`** or **`ubuntu-24.04`** **`source_ami_filter`** (or canonical **Ubuntu** owner id), **`ssh_username = "ubuntu"`**, new **`provision-ubuntu.sh`** (**`apt`**, **`ubuntu`** home paths, **SSM agent** if not preinstalled). Retire or keep **`provision-al2023.sh`** as legacy; update **`pybullet-al2023.pkr.hcl`** name/tags or add **`pybullet-ubuntu.pkr.hcl`** and point **`packer.tf`** at it. |
+| **T2 GPU on Ubuntu** | Script uses **`dnf`** / **`nvidia-release`** AL paths | On Ubuntu use **Ubuntu + NVIDIA** documented path (e.g. **`ubuntu-drivers`** or **NVIDIA CUDA repo** for your LTS)—**must be re-validated** on the same **g5** builder class; keep **install order** “**GPU driver before full desktop stack**” to avoid **GDM** **X** failures documented in this README. |
+| **T3 DCV on Ubuntu** | Tarball is **`amzn2023`** in **`provision-al2023.sh`** | Obtain **Ubuntu**-matching **NICE DCV** packages from **NICE/AWS** documentation; **pin download URL + SHA256** the same way as today; adjust **`dnf install ./…rpm`** to **`.deb`** / official repo as appropriate. |
+| **T4 PyBullet** | Paths assume **`ec2-user`** | Keep **`/opt/pybullet-venv`** or document a new path; **`chown`** to **`ubuntu:ubuntu`**; update **`.bashrc`** hook user. |
+| **T5 VS Code** | Not in AMI; no **8080** | **Path A (desktop):** install **Microsoft** VS Code **`.deb`** during Packer (accept **Microsoft** GPG/repo) or **Snap**. **Path B (browser):** install **`code-server`**, add **SG** rule in **`modules/ec2-instance/sg.tf`**, **`local.allowed_ingress_cidrs`** / doc for **8080**, systemd unit, optional reverse proxy—align with **TO-DO Not started** item **1**. |
+| **T6–T8** | Already met on **AL2023** | Re-run **§7** acceptance after **Ubuntu**/**VS Code** changes; update README **“After deploy”** if login user or ports change. |
+
+### 5. Phased execution plan (recommended order for the next agent)
+
+#### Phase A — Reproduce the current AL2023 baseline (prove the pipeline)
+
+1. Configure **`infrastructure/local.tf`**: **`vpc_name`**, **`aws_cli_profile`**, **`allowed_ingress_cidrs`** (use **`/32`** for your IP when testing).
+2. **`cd infrastructure && tofu init`**
+3. If **SSM parameter** missing: **`tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]`** then **`tofu apply -auto-approve`** (see **Deploy the stack**).
+4. Run **§7** baseline checks on **AL2023** before changing OS.
+
+#### Phase B — Ubuntu golden AMI (OS migration)
+
+1. Duplicate Packer template (e.g. **`packer/pybullet-ubuntu.pkr.hcl`**) or parameterize existing HCL—**do not** silently half-migrate **AL2023** filters with **Ubuntu** scripts.
+2. Implement **`packer/scripts/provision-ubuntu.sh`**: **`apt`** update, **kernel headers** / build tools as needed for **NVIDIA**, **desktop environment** (GNOME or lighter per **TO-DO Next** “slim image”), **DCV** install for **Ubuntu**, **venv** + **pip** same wheel set where possible.
+3. Wire **`infrastructure/packer.tf`** **`local-exec`** to the new template (or **`packer build -only=…`** if multiple builds).
+4. Update **`null_resource`** **`triggers`** **`filesha256`** to include the new script path.
+5. Bump AMI tag convention (e.g. **`PyBulletPacker=golden-ubuntu`**) for human filtering in AWS console.
+6. Global search/replace in **README** for **`ec2-user`** vs **`ubuntu`** anywhere it affects **DCV** or **SSM** instructions.
+
+#### Phase C — VS Code
+
+1. **Choose Path A or B** in **§4** before coding.
+2. If **code-server**: implement **SG** + README security warnings; consider **TLS** termination or **localhost** SSH tunnel pattern to avoid exposing **8080** to **`0.0.0.0/0`**.
+3. Add Packer verification step: **`code --version`** or **`code-server --version`** after install.
+
+#### Phase D — Production readiness (optional but typical)
+
+1. **Dedicated Packer IAM** (replace shared **`personal`** profile) — see **TO-DO Not started** **4**.
+2. **CI/CD** for **`packer build`** — **Not started** **3**.
+3. **AMI lifecycle** cost controls — **Not started** **2**.
+4. **Smoke test** before trusting new **SSM** AMI id — **TO-DO Next** **2**.
+
+### 6. File checklist (copy for task tracking)
+
+**Must read before editing:** **`infrastructure/local.tf`**, **`infrastructure/packer.tf`**, **`infrastructure/compute.tf`**, **`infrastructure/data.tf`**, **`packer/pybullet-al2023.pkr.hcl`**, **`packer/scripts/provision-al2023.sh`**, **`packer/scripts/publish-ami-ssm.sh`**, **`infrastructure/modules/ec2-instance/sg.tf`**, **`infrastructure/modules/ec2-instance/iam.tf`**, **`infrastructure/modules/ec2-instance/locals.tf`**, **`infrastructure/modules/ec2-instance/data.tf`**.
+
+**Likely touched for Ubuntu + VS Code:** new **`packer/*.pkr.hcl`**, new **`packer/scripts/provision-ubuntu.sh`**, **`infrastructure/packer.tf`** (path to template), **`README.md`** (DCV user, install commands), **`modules/ec2-instance/sg.tf`** (if **code-server**), **`local.tf`** (comments only unless new locals).
+
+### 7. Verification commands (acceptance)
+
+Run from **`infrastructure/`** after apply (adjust user if on **Ubuntu**):
+
+```bash
+tofu output -raw pybullet_host_dcv_url
+tofu output -raw pybullet_host_public_ip
+tofu output -raw pybullet_golden_ami_id
+```
+
+**SSM** (AWS CLI profile as you use locally):
+
+```bash
+aws ssm start-session --target "$(tofu output -raw pybullet_host_instance_id)"
+```
+
+On the instance (today **AL2023** / **`ec2-user`**):
+
+```bash
+sudo systemctl is-active dcvserver
+sudo ss -tlnp | grep 8443 || true
+source /opt/pybullet-venv/bin/activate
+python -c "import pybullet as p; c=p.connect(p.DIRECT); print('PyBullet', c); p.disconnect()"
+```
+
+**VS Code** (once implemented): e.g. **`code --version`** on desktop, or **`curl -fI http://127.0.0.1:8080`** for **code-server** (prefer tightening bind address + access path in production).
+
+### 8. Target architecture (product view)
+
+When **Ubuntu**, **DCV**, **PyBullet**, and **VS Code** are all present, the logical shape is:
+
+```mermaid
+flowchart TB
+  subgraph client["Client"]
+    WEB["Browser: DCV and/or code-server"]
+    DCVC["Optional: native DCV client"]
+  end
+  subgraph ec2["EC2 — Ubuntu golden AMI"]
+    DCV["NICE DCV :8443"]
+    GN["Desktop session"]
+    VSC["VS Code or code-server"]
+    PB["/opt/pybullet-venv — PyBullet"]
+    GPU["NVIDIA stack"]
+  end
+  WEB --> DCV
+  DCVC --> DCV
+  DCV --> GN
+  GN --> VSC
+  GN --> PB
+  GPU --> PB
+  GPU --> GN
+```
+
 ### Packer + OpenTofu (golden AMI)
 
 From **`infrastructure/`**, **`null_resource.packer_pybullet_ami`** runs **`packer init`**, **`packer validate`**, and **`packer build`** against **`packer/pybullet-al2023.pkr.hcl`**, passing **`vpc_id`**, **`subnet_id`**, **`region`**, **`project_name`**, and **`aws_cli_profile`**. After the AMI is created, **Packer** runs **`manifest`** + **`publish-ami-ssm.sh`**, which **`aws ssm put-parameter`**’s the AMI id to **`local.packer_golden_ami_ssm_parameter_name`** (default **`/aws-pybullet-environment/golden-ami-id`**). The **ec2-instance** module reads **`data.aws_ssm_parameter`** for **`ami_id`** (still **empty `user_data`**). AMIs remain tagged **`Project`** / **`PyBulletPacker`** for humans and cost tooling; **OpenTofu no longer picks “newest tag”**.
@@ -178,6 +335,7 @@ Search this file for these **exact** headings (outline / **Ctrl+F**):
 | **Architecture (Packer golden AMI — overview)** | Apply host → **`packer build`** → AMI → EC2. |
 | **Architecture (Packer golden AMI on AWS — detailed)** | Full component diagram (Packer + OpenTofu + VPC + AMI contents). |
 | **Repository layout** | Paths and file roles. |
+| **Agent handoff: current state → target workload host** | **For another agent:** inventory, acceptance table (**Ubuntu**, **DCV**, **PyBullet**, **VS Code**), gap matrix, phased plan, verification commands, target Mermaid. |
 | **Packer + OpenTofu (golden AMI)** | Subnet rule, **SSM** parameter, **`packer_ami_id_override`**, IAM (**EC2** + **SSM**), cost, LF line endings. |
 | **Deploy the stack** | **`tofu init`**, optional **`-target`** first apply, **`tofu apply`**, outputs. |
 | **Prerequisites** | AWS profile, OpenTofu, AWS CLI, **Packer**, **Python 3** (SSM publish), **`vpc_name`**, optional **`packer_ami_id_override`**. |
@@ -195,7 +353,7 @@ Search this file for these **exact** headings (outline / **Ctrl+F**):
 
 ### What the golden AMI contains
 
-The only supported runtime in this repo is the **Packer-built Amazon Linux 2023** image: **NVIDIA** drivers (when the builder is **g4dn** / **g5** / **g6** class), **GNOME + GDM**, **NICE DCV** **2025.0** (pinned tarball + **SHA256** check; AL2023 RPMs, **`dcv.conf`** automatic console for **`ec2-user`**), and **`/opt/pybullet-venv`** with **PyBullet** and scientific Python wheels. **VS Code** and **code-server** are **not** in this AMI (add via **Next** / custom provisioner if needed).
+The only supported runtime in this repo is the **Packer-built Amazon Linux 2023** image: **NVIDIA** drivers (when the builder is **g4dn** / **g5** / **g6** class), **GNOME + GDM**, **NICE DCV** **2025.0** (pinned tarball + **SHA256** check; AL2023 RPMs, **`dcv.conf`** automatic console for **`ec2-user`**), and **`/opt/pybullet-venv`** with **PyBullet** and scientific Python wheels. **VS Code** and **code-server** are **not** in this AMI (add via **Next** / custom provisioner if needed). For a **handoff-ready** breakdown of **done vs target** (**Ubuntu**, **VS Code**, etc.), see **Agent handoff: current state → target workload host** (**§2** target table, **§4** gaps, **§5** phases).
 
 ### Done
 
@@ -203,7 +361,7 @@ The only supported runtime in this repo is the **Packer-built Amazon Linux 2023*
 2. **OpenTofu**: **`infrastructure/packer.tf`** (**`null_resource`**, **`data.aws_ssm_parameter`**, **`depends_on`**); **`local.packer_golden_ami_ssm_parameter_name`**; **`data.aws_subnets`** + **`local.packer_subnet_id`**; **`local.packer_ami_id_override`**; **`compute.tf`** passes **`ami_id`** from **SSM** or override.
 3. **EC2 module**: required **`ami_id`**; default **empty `user_data`**; **`user_data.sh`** retained as **no-op** reference only; vanilla **AL2023 `data.aws_ami`** removed from module.
 4. **Removed**: **`infrastructure/ecr.tf`** (ECR + container push) and the **`docker/`** tree—**Packer** is the only image path.
-5. **Docs**: README **architecture** Mermaid diagrams, **Packer** runbook, **deploy** two-step flow, **troubleshooting** (golden AMI, **OpenTofu** / **SSM** parameter, **SSM** agent), **`.gitattributes`** for **LF** on **`*.tf`**, **`*.pkr.hcl`**, and **`packer/scripts/*.sh`**, and **Install Packer on Linux or WSL** (zip + **`apt`**, **`packer validate`**, verified on **WSL2**).
+5. **Docs**: README **architecture** Mermaid diagrams, **Agent handoff** (inventory, target table, gaps, phased plan, verification), **Packer** runbook, **deploy** two-step flow, **troubleshooting** (golden AMI, **OpenTofu** / **SSM** parameter, **SSM** agent), **`.gitattributes`** for **LF** on **`*.tf`**, **`*.pkr.hcl`**, and **`packer/scripts/*.sh`**, and **Install Packer on Linux or WSL** (zip + **`apt`**, **`packer validate`**, verified on **WSL2**).
 
 ### Not started
 
@@ -214,8 +372,12 @@ The only supported runtime in this repo is the **Packer-built Amazon Linux 2023*
 5. **Builder vs runtime instance type**: today the **Packer** builder is **g5.xlarge**; documenting or parameterizing alignment when **`local.ec2_instance_type`** is **g4dn.*** / **g6.*** only (drivers usually still compatible).
 6. **Root device mapping**: validate **`/dev/xvda`** **`launch_block_device_mappings`** across all target regions / AL2023 builds; adjust **`pybullet-al2023.pkr.hcl`** if AWS changes root device naming.
 7. **Optional container runtime**: reintroduce **ECR** / **Docker on EC2** as a second code path only if you need containers **in addition to** the golden AMI.
+8. **Ubuntu LTS golden AMI**: new Packer source + **`provision-ubuntu.sh`** (or equivalent); **DCV** and **NVIDIA** install paths for **Ubuntu** (not the current **AL2023** RPM/tarball flow). Detailed steps: **Agent handoff** **§5** Phase **B** and **§4** row **T1–T3**.
+9. **VS Code**: neither desktop **VS Code** nor **`code-server`** is in the AMI; requires a chosen install path and, for browser IDE, **SG** / ingress updates (**Not started** item **1**). See **Agent handoff** **§5** Phase **C** and **§4** row **T5**.
 
 ### Next (ordered)
+
+**Primary track (pass to another agent):** Follow **Agent handoff: current state → target workload host**—use **§5** phases **A→D**, the **§4** gap matrix, **§6** file checklist, and **§7** verification commands. That is the authoritative path from today’s **AL2023** baseline to **Ubuntu**, **VS Code**, hardened **SSM**, and optional slim/smoke-test work.
 
 1. **Slim golden image**: optional “minimal GPU + PyBullet + DCV” variant vs full **Desktop** group to reduce AMI size and build time.
 2. **Automated smoke test**: SSM command or CI step that **`systemctl is-active dcvserver`** / **`curl -k https://localhost:8443/`** on a throwaway instance built from the new AMI before **`put-parameter`** (or before you rely on the new **SSM** value).
@@ -225,6 +387,7 @@ The only supported runtime in this repo is the **Packer-built Amazon Linux 2023*
 
 ### Reference files
 
+- **Agent handoff** — **Agent handoff: current state → target workload host** (inventory, gaps, phases, verification).
 - **`packer/scripts/provision-al2023.sh`** — golden AMI install steps (pinned **DCV** + **SHA256**).
 - **`packer/scripts/publish-ami-ssm.sh`** — post-build **SSM** publish (manifest → **`put-parameter`**).
 - **`packer/pybullet-al2023.pkr.hcl`** — **amazon-ebs** builder, disk, tags, provisioners, **manifest** + **shell-local** post-processors.
