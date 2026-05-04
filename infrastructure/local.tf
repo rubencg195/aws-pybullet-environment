@@ -1,11 +1,23 @@
 locals {
   project_name = "aws-pybullet-environment"
 
+  # If non-null, skip Packer null_resource and data.aws_ami lookup; use this AMI for EC2.
+  packer_ami_id_override = null
+
+  # Subnet for Packer build instance (must reach internet). Same logic as ec2-instance module.
+  packer_subnet_id = coalesce(
+    local.ec2_subnet_id,
+    length(data.aws_subnets.public_in_vpc.ids) > 0 ? sort(data.aws_subnets.public_in_vpc.ids)[0] : null,
+  )
+
+  # AWS CLI profile for Packer null_resource. Match provider "aws" profile in provider.tf.
+  aws_cli_profile = "personal"
+
   # Must match the VPC’s Name tag in AWS (used by the ec2-instance module to select the VPC).
   vpc_name = "default-vpc"
 
-  ec2_key_name        = null
-  ec2_instance_type   = "g5.xlarge"
+  ec2_key_name      = null
+  ec2_instance_type = "g5.xlarge"
   # Optional subnet id; if null, first subnet id (sorted) whose Name matches *public* for this VPC (see module data.aws_subnets.filtered).
   ec2_subnet_id = null
 

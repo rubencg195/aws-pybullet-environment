@@ -3,6 +3,11 @@ variable "project_name" {
   description = "Prefix for resource names and common tags."
 }
 
+variable "ami_id" {
+  type        = string
+  description = "Golden AMI id (e.g. from Packer). Must include GNOME, DCV, PyBullet venv, and GPU drivers if applicable."
+}
+
 variable "vpc_id" {
   type        = string
   description = "VPC id for the instance, security group, and subnet discovery."
@@ -39,7 +44,7 @@ variable "root_volume_size_gb" {
 variable "user_data" {
   type        = string
   default     = null
-  description = "Override bootstrap script. If null, the built-in user_data.sh is used."
+  description = "Optional cloud-init / shell user data. Default is empty (golden AMI is fully baked)."
 }
 
 variable "tags" {

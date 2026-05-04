@@ -3,8 +3,13 @@ output "aws_region" {
   value       = data.aws_region.current.id
 }
 
+output "pybullet_golden_ami_id" {
+  description = "AMI id used for the PyBullet host (Packer golden or packer_ami_id_override)"
+  value       = local.packer_ami_id_override != null ? local.packer_ami_id_override : data.aws_ami.pybullet_golden[0].id
+}
+
 output "pybullet_host_instance_id" {
-  description = "g4dn PyBullet host instance id (SSM session target)"
+  description = "PyBullet host instance id (SSM session target)"
   value       = module.pybullet_host.instance_id
 }
 

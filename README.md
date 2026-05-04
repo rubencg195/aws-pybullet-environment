@@ -2,9 +2,9 @@
 
 Infrastructure and tooling to run **PyBullet** physics simulation in **Amazon Web Services (AWS)**, so robotics and simulation work can be performed **remotely** from a **low-specification or portable client** (for example, a small laptop on Wi‑Fi) while the **GPU and CPU work** run on a **dedicated host in the cloud**. The goal is to separate **where you work** from **where the simulation runs**: a graphical desktop, DCV, and the PyBullet environment live on **EC2**; the client only needs a **browser** or the **NICE DCV** / **SSM** tooling.
 
-The repository is moving toward a **Docker image** (`docker/Dockerfile`) as the canonical PyBullet runtime (CUDA user-space, **Visual Studio Code**, optional **code-server**, **Amazon DCV** packages on **Ubuntu 22.04**), built and pushed to **ECR** from OpenTofu in a follow-up step. **Today**, OpenTofu still provisions **Amazon Linux 2023** and first-boot **user data** as in `infrastructure/modules/ec2-instance/user_data.sh`; the Docker path does not replace that flow until EC2 and user data are wired to the image.
+**Production path:** **HashiCorp Packer** bakes **Amazon Linux 2023** with **NVIDIA drivers** (on **g4dn** / **g5** / **g6**-class builders), **GNOME**, **NICE/Amazon DCV**, and **`/opt/pybullet-venv`** (PyBullet stack) into a **golden AMI**. **OpenTofu** runs **`packer build`** from a **`null_resource`** **`local-exec`** (`infrastructure/packer.tf`), then selects the newest self-owned AMI by tags and launches **EC2** with **empty `user_data`**—nothing is installed at first boot on the instance.
 
-**What is deployed today** (see `infrastructure/`): a **GPU** EC2 instance (default type **`g5.xlarge`**, set in `local.tf`), **Amazon Linux 2023**, **NICE/Amazon DCV** (HTTPS on **8443**), **SSM** (no password stored in OpenTofu configuration), a **security group** with CIDRs from `local.tf`, first-boot **user data** (GNOME, DCV, PyBullet in `/opt/pybullet-venv`). The VPC is selected by the **`Name`** tag (`local.vpc_name` in `local.tf` → `data.aws_vpc` in `data.tf`).
+**What is deployed today** (see `infrastructure/`): **`null_resource`** drives **Packer** (requires **Packer CLI** + **AWS credentials** on the apply host), **`data.aws_ami`** resolves the golden image, and the **ec2-instance** module runs a **GPU** instance (default **`g5.xlarge`**) with **SSM**, **DCV :8443**, and ingress from **`local.allowed_ingress_cidrs`**. The VPC is chosen by **`local.vpc_name`** → `data.aws_vpc`.
 
 ## Architecture (overview)
 
@@ -27,100 +27,92 @@ flowchart LR
 flowchart TB
   subgraph iac["Infrastructure as code"]
     OT["OpenTofu in infrastructure/"]
+    PK["packer.tf — null_resource packer build"]
+    AMI["data.aws_ami — golden tags"]
   end
   subgraph net["VPC by Name tag"]
     SG["Security group: SSH, DCV"]
     SN["Subnet: Name *public* filter in vpc"]
   end
   subgraph compute["Compute"]
-    AL2023["Amazon Linux 2023 AMI"]
-    UD["user_data: Desktop + DCV + PyBullet venv"]
-    G5["Instance: g5.xlarge (NVIDIA A10G class)"]
+    GOLD["Golden AMI — AL2023 + GNOME + DCV + PyBullet venv + NVIDIA"]
+    G5["Instance: g5.xlarge"]
+    UD["user_data: empty"]
   end
   subgraph access["Access"]
     SSM["IAM: SSM Session Manager"]
   end
+  OT --> PK
+  PK --> AMI
   OT --> G5
-  G5 --> AL2023
+  G5 --> GOLD
   G5 --> SG
   G5 --> SN
   G5 --> UD
   G5 --> SSM
 ```
 
-## Architecture (Docker image and future ECR flow — overview)
-
-This is the **target** shape once the PyBullet host runs the container from **ECR** on **g5** (NVIDIA Container Toolkit on the instance). **ECR and EC2 user-data changes are not applied yet**; only the image definition exists under `docker/`.
+## Architecture (Packer golden AMI — overview)
 
 ```mermaid
 flowchart LR
-  subgraph dev["Developer machine"]
-    DOCKER["docker build / tofu + local-exec (next)"]
+  subgraph dev["Apply host (e.g. WSL2)"]
+    TOFU["tofu apply -auto-approve"]
+    PKR["packer build — temporary g5 builder"]
   end
   subgraph aws["AWS"]
-    ECR["Amazon ECR (planned)"]
-    EC2["EC2 g5.xlarge"]
-    IMG["PyBullet + DCV + VS Code image"]
+    AMI["Golden AMI — self-owned"]
+    EC2["EC2 g5 — same stack baked in"]
   end
   subgraph client["Client"]
-    DCVC["DCV client or browser :8443"]
-    WEB["Optional code-server :8080"]
+    DCVC["DCV :8443"]
   end
-  DOCKER --> ECR
-  ECR --> EC2
-  EC2 --> IMG
+  TOFU --> PKR
+  PKR --> AMI
+  TOFU --> EC2
+  EC2 --> AMI
   DCVC --> EC2
-  WEB --> EC2
 ```
 
-## Architecture (Docker image on GPU EC2 — detailed)
+## Architecture (Packer golden AMI on AWS — detailed)
 
 ```mermaid
 flowchart TB
   subgraph iac["OpenTofu (infrastructure/)"]
     OT["tofu apply -auto-approve"]
+    NR["null_resource.packer_pybullet_ami"]
+    DATA["data.aws_ami PyBulletPacker=golden-al2023"]
     MOD["module ec2-instance"]
+  end
+  subgraph packer["Packer (packer/)"]
+    SRC["source amazon-ebs AL2023 base"]
+    SH["scripts/provision-al2023.sh"]
+    RB["reboot provisioner"]
   end
   subgraph net["Networking"]
     VPC["data.aws_vpc by Name tag"]
     SG["Security group: SSH 22, DCV 8443"]
-    SN["Subnet: public or local.ec2_subnet_id"]
+    SN["Subnet for build + instance"]
   end
-  subgraph host["EC2 host (current: Amazon Linux 2023; future: Ubuntu + NVIDIA driver)"]
-    GPU["NVIDIA A10G — kernel driver on host"]
-    NCT["NVIDIA Container Toolkit (planned)"]
-    DOCK["containerd / Docker engine (planned)"]
-  end
-  subgraph image["Container image from docker/Dockerfile"]
-    BASE["nvidia/cuda 12.4.1 + cuDNN — Ubuntu 22.04 userland"]
+  subgraph golden["Golden AMI contents"]
+    NV["nvidia-driver-cuda on g4dn/g5/g6 builder"]
+    GN["GNOME + GDM graphical.target"]
+    DCV["NICE DCV RPMs + dcv.conf ec2-user console"]
     PYB["/opt/pybullet-venv — pybullet, numpy, scipy, …"]
-    VSC["Microsoft VS Code .deb"]
-    CS["code-server — browser IDE"]
-    DCVP["Amazon DCV .debs — server, web viewer, xdcv, dcv-gl"]
-    XFCE["XFCE — desktop for DCV virtual sessions"]
-  end
-  subgraph ports["Ports (typical)"]
-    P8443["8443 TCP — DCV HTTPS"]
-    P8080["8080 TCP — code-server (optional)"]
   end
   subgraph access["Access"]
     SSM["SSM Session Manager"]
   end
-  OT --> MOD
+  OT --> NR
+  NR --> SRC
+  SRC --> SH
+  SH --> RB
+  RB --> DATA
+  DATA --> MOD
   MOD --> VPC
   MOD --> SG
   MOD --> SN
-  MOD --> GPU
-  GPU --> NCT
-  NCT --> DOCK
-  DOCK --> image
-  BASE --> PYB
-  BASE --> VSC
-  BASE --> CS
-  BASE --> DCVP
-  BASE --> XFCE
-  image --> P8443
-  image --> P8080
+  MOD --> golden
   MOD --> SSM
 ```
 
@@ -128,141 +120,110 @@ flowchart TB
 
 | Path | Purpose |
 |------|--------|
-| `docker/Dockerfile` | **PyBullet GPU image**: CUDA user-space on Ubuntu 22.04, PyBullet venv, **VS Code**, **code-server**, **Amazon DCV** + XFCE stack; see [PyBullet Docker image](#pybullet-docker-image) and [TO-DO](#to-do). |
-| `docker/entrypoint.sh` | Container entry: default shell, or `START_CODE_SERVER=1` for code-server. |
+| `packer/pybullet-al2023.pkr.hcl` | **Packer** template: **amazon-ebs** builder on **AL2023**, **g5**-class build instance, tags for OpenTofu **`data.aws_ami`**. |
+| `packer/scripts/provision-al2023.sh` | Shell provisioner: **NVIDIA**, **GNOME**, **DCV**, **`/opt/pybullet-venv`** (same intent as the former cloud-init script). |
+| `infrastructure/packer.tf` | **`null_resource`** runs **`packer init`**, **`packer validate`**, **`packer build`**; **`data.aws_ami`** selects the newest golden AMI. |
+| `.gitattributes` | Forces **LF** line endings for **`*.tf`** / **`*.pkr.hcl`** (avoids **`local-exec`** bash CRLF failures on Windows checkouts). |
 | `infrastructure/provider.tf` | AWS provider, **S3 backend** (OpenTofu remote state); align **`profile`** with your CLI profile. |
-| `infrastructure/local.tf` | **Instance** settings, **`allowed_ingress_cidrs`**, **`vpc_name`** (must match the VPC’s **`Name`** tag in EC2), optional **`ec2_subnet_id`** (else subnets with **`Name` *public* auto-picked), etc. |
-| `infrastructure/data.tf` | `data.aws_vpc` (by **`local.vpc_name`**) and account/region data. |
-| `infrastructure/compute.tf` | Wires the **ec2-instance** module. |
-| `infrastructure/outputs.tf` | **Public IP**, instance id, **region** (SSM/CLI helpers). |
-| `infrastructure/modules/ec2-instance` | IAM (SSM), security group, instance, `user_data.sh` |
+| `infrastructure/local.tf` | **Instance** settings, **`packer_ami_id_override`**, **`allowed_ingress_cidrs`**, **`vpc_name`**, optional **`ec2_subnet_id`**, etc. |
+| `infrastructure/data.tf` | **`data.aws_vpc`**, **`data.aws_subnets`** (public `Name` filter), account/region. |
+| `infrastructure/compute.tf` | Wires the **ec2-instance** module with **`ami_id`** from Packer or override. |
+| `infrastructure/outputs.tf` | **Public IP**, instance id, **`pybullet_golden_ami_id`**, **region**. |
+| `infrastructure/modules/ec2-instance` | IAM (SSM), security group, instance; **`user_data`** defaults to **empty**; legacy **`user_data.sh`** is a no-op reference. |
 | `src/` | Application and simulation code (to be expanded). |
 
-## PyBullet Docker image
+### Packer + OpenTofu (golden AMI)
 
-The image is based on **`nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04`**: it ships **CUDA libraries and cuDNN in user space**; the **NVIDIA kernel driver** must exist on the **host** (for example an **NVIDIA GPU-optimized AMI** or a manually installed driver on **Ubuntu**). On **EC2 g5.xlarge**, run the container with **`--gpus all`** after installing the **NVIDIA Container Toolkit** on the instance. Keep the image CUDA line within the range your host driver supports ([CUDA compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/index.html)).
+From **`infrastructure/`**, **`null_resource.packer_pybullet_ami`** runs **`packer init`**, **`packer validate`**, and **`packer build`** against **`packer/pybullet-al2023.pkr.hcl`**, passing **`vpc_id`**, **`subnet_id`** (same public-subnet rule as the EC2 module), **`region`**, and **`project_name`**. The resulting AMI is tagged **`Project=<project_name>`** and **`PyBulletPacker=golden-al2023`**; **`data.aws_ami.pybullet_golden`** selects the **newest** match in your account. The **ec2-instance** module uses that **`ami_id`** and **empty `user_data`**.
 
-What is inside the image:
+**Prerequisites on the apply host:** [**Packer**](https://developer.hashicorp.com/packer/install) CLI, **AWS CLI v2**, and IAM for **`local.aws_cli_profile`** (default **`personal`**) sufficient to **run temporary EC2** for the build (**`ec2:RunInstances`**, **`ec2:CreateImage`**, **`ec2:Describe*`**, **`iam:PassRole`** if you add instance profiles later, etc.). The Packer builder uses **`g5.xlarge`** so **NVIDIA** packages match **g4dn/g5/g6**-class instances.
 
-- **`/opt/pybullet-venv`** — PyBullet, NumPy, SciPy, Pillow, Matplotlib (same stack as the old user-data venv path conceptually).
-- **Visual Studio Code** (`code`) — GUI when a display is available (for example under **DCV** on the host desktop, or X11 forwarding).
-- **code-server** — VS Code–compatible **browser** editor; start with **`START_CODE_SERVER=1`** (set **`PASSWORD`** for the login prompt unless you change auth).
-- **Amazon DCV** (server, web viewer, **xdcv**, **dcv-gl**) and **XFCE** — for **virtual sessions** once the container is run like a full VM (often **`--privileged`**, cgroup, and **dbus** on the host); production setups commonly run **DCV on the EC2 host** and use the container only for **CUDA + PyBullet**, which is simpler to operate.
+**First-time / empty account:** If a full **`tofu plan`** errors because **no golden AMI** exists yet, run **`tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]`** once (long build), then a **full** **`tofu apply -auto-approve`**. Alternatively set **`local.packer_ami_id_override`** in **`local.tf`** to an existing **`ami-…`** to **skip** Packer in OpenTofu.
 
-Build (from the repository root; requires Docker):
+**Rebuild triggers:** **`filesha256`** of **`packer/pybullet-al2023.pkr.hcl`** and **`packer/scripts/provision-al2023.sh`**. Changing them creates a **new** AMI; the next apply may **replace** the instance if **`data.aws_ami`** resolves to the newer image.
 
-```bash
-docker build -t pybullet-dcv:dev -f docker/Dockerfile docker/
-```
+**IAM (apply principal):** The profile used for **`tofu apply`** must be allowed to start the **temporary** Packer builder (typical broad policies: **`PowerUserAccess`**, **`AdministratorAccess`**, or a custom policy with **`ec2:RunInstances`**, **`ec2:TerminateInstances`**, **`ec2:CreateImage`**, **`ec2:Describe*`**, **`ec2:CreateTags`**, **`ec2:CreateSnapshot`**, **`ec2:DeleteSnapshot`** for lifecycle, plus **`iam:CreateServiceLinkedRole`** if AWS creates EC2-linked roles on first use).
 
-Smoke test (**GPU optional** for import + `DIRECT`):
+**Cost:** Each **`packer build`** runs a **g5.xlarge** for the duration of the install (often **30–60+ minutes**) and stores a new **AMI snapshot** (ongoing storage charges). Deregister unused AMIs and snapshots when iterating.
 
-```bash
-docker run --rm -it pybullet-dcv:dev bash -lc "python -c \"import pybullet as p; c=p.connect(p.DIRECT); print('ok', c); p.disconnect()\""
-```
+**State migration:** If an older revision of this repo had **`infrastructure/ecr.tf`** in state, **`tofu plan`** may propose **destroying** ECR resources—expected after the pivot. Review the plan before apply.
 
-With an NVIDIA GPU and the Container Toolkit on Linux:
+**Line endings:** Keep **`*.tf`** and **`*.pkr.hcl`** as **LF** (see **`.gitattributes`**) so **`local-exec`** bash scripts are not corrupted by CRLF.
+
+After apply:
 
 ```bash
-docker run --rm -it --gpus all pybullet-dcv:dev bash -lc "nvidia-smi && python -c \"import pybullet as p; print('pybullet', p.__version__)\""
-```
-
-Optional **code-server** (bind **8080**; add **8080/tcp** to the security group when you expose it from EC2):
-
-```bash
-docker run --rm -it -p 8080:8080 -e START_CODE_SERVER=1 -e PASSWORD=changeme pybullet-dcv:dev
+cd infrastructure
+tofu output -raw pybullet_golden_ami_id
 ```
 
 ## TO-DO
 
-Roadmap and status for the **Docker image**, **ECR**, and **EC2** integration. Link: `#to-do`.
+Roadmap and status for **Packer**, **OpenTofu**, and **EC2** (single golden-AMI path). Anchor: **`#to-do`**.
 
-### `user_data.sh` vs `docker/Dockerfile`
+### Documentation map
 
-OpenTofu still provisions **Amazon Linux 2023** and runs **`infrastructure/modules/ec2-instance/user_data.sh` on the EC2 host**. The **Dockerfile** builds an **Ubuntu 22.04**-based **container** image. They are **not** the same operating system; packages and DCV archives **must** differ. Nothing is “wrong” solely because paths use `dnf` vs `apt` or `amzn2023` vs `ubuntu2204`.
+Search this file for these **exact** headings (outline / **Ctrl+F**):
 
-| Concern | `user_data.sh` (AL2023 **host**) | `docker/Dockerfile` (**container**) | Parity / gap |
-|--------|-----------------------------------|--------------------------------------|----------------|
-| Package manager | `dnf` / `dnf groupinstall` | `apt-get` | Expected OS difference |
-| NVIDIA kernel driver | Installs `nvidia-release`, `nvidia-driver-cuda` for `g4dn*`, `g5*`, `g6*` | **Not** in image; host (or GPU AMI) must provide driver for `--gpus all` | **By design**; CUDA image carries user-space libraries only |
-| Desktop / session | GNOME “Desktop” group, **GDM**, `WaylandEnable=false`, graphical target | **XFCE** + dbus-x11 (lighter; geared toward DCV **virtual** sessions) | **Not equivalent** to full GNOME console session; future host may still need GDM/GNOME **on the EC2 OS** if you rely on DCV **automatic console** like today |
-| DCV distribution | `nice-dcv-amzn2023-x86_64.tgz` RPMs | `nice-dcv-ubuntu2204-x86_64.tgz` DEBs | **Correct** per platform; do **not** swap tarball names between host and container |
-| DCV GL / virtual | `nice-dcv-gl`, `nice-xdcv` RPMs | `nice-dcv-gl`, `nice-xdcv` DEBs | Aligned feature set |
-| `dcv.conf` | Patches **automatic-console-session** `owner="ec2-user"` (AL2023 + DCV pattern) | **Not** patched; defaults depend on DCV package; container has no **`ec2-user`** | **Gap** if you run DCV **inside** this container and need the same console-owner behavior; **no gap** if DCV stays on the **host** and the container only runs PyBullet/CUDA |
-| PyBullet | `/opt/pybullet-venv`, pip: numpy, scipy, pybullet, Pillow, matplotlib | Same path and **same pip set** | **Aligned** |
-| VS Code / browser IDE | Not in user_data | `code` (Microsoft) + **code-server** | Intentional **extension** in the image |
-| User / ownership | `chown ec2-user`, `.bashrc` auto-activate venv | No `ec2-user`; venv owned by root unless a follow-up `USER`/`chown` layer is added | **Gap** only when mapping Linux users for DCV or bind-mounted home |
-| Firewall | `firewalld` port **8443** if active | Use Docker / EC2 **security groups** for published ports | Different layer; open **8080** if exposing code-server |
+| Heading | What you get |
+|--------|----------------|
+| **Architecture (overview)** | Client → DCV → EC2. |
+| **Architecture (detailed)** | OpenTofu, Packer **`null_resource`**, golden **`data.aws_ami`**, empty **`user_data`**. |
+| **Architecture (Packer golden AMI — overview)** | Apply host → **`packer build`** → AMI → EC2. |
+| **Architecture (Packer golden AMI on AWS — detailed)** | Full component diagram (Packer + OpenTofu + VPC + AMI contents). |
+| **Repository layout** | Paths and file roles. |
+| **Packer + OpenTofu (golden AMI)** | Tags, subnet rule, **`packer_ami_id_override`**, IAM, cost, state migration, LF line endings. |
+| **Deploy the stack** | **`tofu init`**, optional **`-target`** first apply, **`tofu apply`**, outputs. |
+| **Prerequisites** | AWS profile, OpenTofu, AWS CLI, **Packer**, SSM plugin, **`vpc_name`**. |
+| **After deploy: NICE / Amazon DCV** | Ingress, SSM, **`ec2-user`** password, DCV web client, PyBullet checks. |
+| **Troubleshooting DCV HTTPS on port 8443** | IP, security group, **section 3** (golden AMI / **`dcvserver`**) checks. |
 
-**Conclusion:** The Dockerfile is **set up consistently** with the **intent** of the old bootstrap (PyBullet venv + DCV-capable stack + GPU-friendly GL) for an **Ubuntu-based container**. It is **not** a line-for-line duplicate of Amazon Linux **host** user data. The next infrastructure step is to decide **where DCV runs** (host vs container) and align **AMI OS**, **user_data**, and **ECR pull** accordingly.
+### Status legend
+
+- **Done** — Implemented in this repository revision.
+- **Not started** — Not implemented; no hidden code path.
+- **Next** — Recommended order for follow-up work.
+
+### What the golden AMI contains
+
+The only supported runtime in this repo is the **Packer-built Amazon Linux 2023** image: **NVIDIA** drivers (when the builder is **g4dn** / **g5** / **g6** class), **GNOME + GDM**, **NICE DCV** (AL2023 RPMs, **`dcv.conf`** automatic console for **`ec2-user`**), and **`/opt/pybullet-venv`** with **PyBullet** and scientific Python wheels. **VS Code** and **code-server** are **not** in this AMI (add via **Next** / custom provisioner if needed).
 
 ### Done
 
-1. **Repository layout**: Added **`docker/Dockerfile`**, **`docker/entrypoint.sh`**, **`docker/.dockerignore`**.
-2. **Base image**: `nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04` with **PATH** including **`/opt/pybullet-venv/bin`**.
-3. **PyBullet environment**: Python venv at **`/opt/pybullet-venv`** with **`numpy>=1.22`**, **scipy**, **pybullet**, **Pillow**, **matplotlib** (matches **`user_data.sh`** pip list).
-4. **Editors**: Microsoft **VS Code** (`code`); **code-server** (pinned **`CODE_SERVER_VERSION`**) with **`START_CODE_SERVER=1`** in **`docker/entrypoint.sh`**; **`PASSWORD`** env for password auth.
-5. **DCV in image**: Ubuntu 22.04 **DEB** tarball from CloudFront (**server**, **web-viewer**, **xdcv**, **dcv-gl**); **XFCE** for a desktop stack inside the image.
-6. **Process init**: **`tini`** as PID 1; **`policy-rc.d`** only during image build for apt postinst scripts.
-7. **Documentation**: **README** updated with Docker-centric **architecture** Mermaid diagrams, **PyBullet Docker image** build/run examples, intro note that **ECR wiring is not done yet**.
-8. **OpenTofu default instance type**: **`infrastructure/local.tf`** sets **`ec2_instance_type`** to **`g5.xlarge`** (still **AL2023** AMI + existing **`user_data.sh`** until you change the module).
+1. **Packer**: **`packer/pybullet-al2023.pkr.hcl`** (**amazon-ebs**, **AL2023**, **g5.xlarge** builder, **80 GiB** root, tags **`Project`**, **`PyBulletPacker=golden-al2023`**); **`packer/scripts/provision-al2023.sh`** (NVIDIA for **g4dn/g5/g6**-class builder metadata, **GNOME**, **DCV**, **`/opt/pybullet-venv`**); post-provision **reboot** + sanity check in Packer.
+2. **OpenTofu**: **`infrastructure/packer.tf`** (**`null_resource`** **`local-exec`**, **`data.aws_ami`**, **`depends_on`** ordering); **`data.aws_subnets`** + **`local.packer_subnet_id`**; **`local.packer_ami_id_override`**; **`compute.tf`** passes **`ami_id`**.
+3. **EC2 module**: required **`ami_id`**; default **empty `user_data`**; **`user_data.sh`** retained as **no-op** reference only; vanilla **AL2023 `data.aws_ami`** removed from module.
+4. **Removed**: **`infrastructure/ecr.tf`** (ECR + container push) and the **`docker/`** tree—**Packer** is the only image path.
+5. **Docs**: README **architecture** Mermaid diagrams, **Packer** runbook, **deploy** two-step flow, **troubleshooting** section 3 for golden AMI, **`.gitattributes`** for **LF** on **`*.tf`** / **`*.pkr.hcl`**.
 
 ### Not started
 
-1. **No ECR repository** or **`local-exec`** build/push in OpenTofu.
-2. **No change** to **`data.aws_ami`** / **`aws_instance`** to use **Ubuntu** or a **GPU-optimized AMI** for the PyBullet host.
-3. **No replacement** of **`user_data.sh`** with “Docker + ECR only” bootstrap; **AL2023** still installs GNOME, DCV, and a **second** PyBullet venv on the host (duplicate of container until you remove or slim host install).
-4. **No security group** rule for **TCP 8080** (code-server) unless added manually later.
-5. **No IAM** for EC2 instance role to **`ecr:GetAuthorizationToken`**, **`ecr:BatchGetImage`**, **`ecr:GetDownloadUrlForLayer`**, etc., for pull from ECR.
+1. **Security group**: inbound **TCP 8080** if you add a browser IDE or app on that port later.
+2. **AMI / snapshot lifecycle**: automated deregister of old golden AMIs or cost alerts.
+3. **CI/CD**: **`packer build`** (and optional **`tofu`**) in **GitHub Actions**, **CodeBuild**, or similar—no laptop-only requirement.
+4. **Dedicated Packer IAM**: least-privilege role/user for **`ec2:*`** build + **`CreateImage`** instead of sharing the developer **`personal`** profile.
+5. **Builder vs runtime instance type**: today the **Packer** builder is **g5.xlarge**; documenting or parameterizing alignment when **`local.ec2_instance_type`** is **g4dn.*** / **g6.*** only (drivers usually still compatible).
+6. **Root device mapping**: validate **`/dev/xvda`** **`launch_block_device_mappings`** across all target regions / AL2023 builds; adjust **`pybullet-al2023.pkr.hcl`** if AWS changes root device naming.
+7. **Optional container runtime**: reintroduce **ECR** / **Docker on EC2** as a second code path only if you need containers **in addition to** the golden AMI.
 
 ### Next (ordered)
 
-#### Phase A — ECR + `local-exec`
+1. **Pin DCV tarball** (versioned URL or checksum verify in **`provision-al2023.sh`**) so Packer builds are reproducible.
+2. **Stable AMI pointer**: write **`ami-id`** to **SSM Parameter Store** (or a small manifest object) from **`packer build`** / post-processor and have OpenTofu read that instead of **“newest tag”** if you need stricter drift control.
+3. **Slim golden image**: optional “minimal GPU + PyBullet + DCV” variant vs full **Desktop** group to reduce AMI size and build time.
+4. **Automated smoke test**: SSM command or CI step that **`systemctl is-active dcvserver`** / **`curl -k https://localhost:8443/`** on a throwaway instance built from the new AMI before promoting tags.
 
-1. **Decide region and naming**: ECR repository name (for example **`aws-pybullet-environment/pybullet-dcv`** or project-prefixed), image tag strategy (**`latest`** vs **`git sha`**).
-2. **Add OpenTofu resources** (new file such as **`infrastructure/ecr.tf`** or under a small module):
-   - **`aws_ecr_repository`** for the PyBullet image.
-   - Optional **`aws_ecr_lifecycle_policy`** (expire untagged / old images) to control cost.
-3. **IAM for push** (pick one pattern):
-   - **Developer machine / CI**: ensure the profile used by **`local-exec`** can **`ecr:PutImage`**, **`ecr:InitiateLayerUpload`**, **`ecr:UploadLayerPart`**, **`ecr:CompleteLayerUpload`**, **`ecr:BatchCheckLayerAvailability`**, **`ecr:GetAuthorizationToken`** (often via **`AmazonEC2ContainerRegistryPowerUser`** or a tighter custom policy).
-   - Document that **`tofu apply`** must run where **Docker** can build **Linux/amd64** images (native Linux, **WSL2**, or **buildx** with a Linux builder); raw **Windows** PowerShell without Docker/WSL may fail.
-4. **`null_resource` + `local-exec`** (user preference: **OpenTofu** + **`-auto-approve`**):
-   - **`aws ecr get-login-password`** piped to **`docker login`** (non-interactive).
-   - **`docker build`** with **`-f docker/Dockerfile`** and context **`docker/`** (same as README).
-   - **`docker tag`** and **`docker push`** to **`${aws_ecr_repository.this.repository_url}:tag`**.
-5. **Triggers**: Use **`timestamp()`** only if you accept rebuild every apply; prefer **`sha256(file(...))`** on **`docker/Dockerfile`** + **`docker/entrypoint.sh`** + any install script so apply rebuilds only when sources change.
-6. **Outputs**: Add **`tofu output`** for **ECR repository URL** and **pushed image URI** for copy-paste into EC2 user data or systemd units.
-7. **README**: Extend the Docker section with “**Push from OpenTofu**” commands and prerequisites (**Docker**, **AWS CLI**, profile).
+**Acceptance for item 1:** Two builds with the same inputs produce the same **DCV** and **PyBullet** versions (or a documented diff only when upstream metadata changes).
 
-**Acceptance criteria (Phase A):** After **`cd infrastructure && tofu apply -auto-approve`**, the image appears in **ECR** in the correct account/region and can be **`docker pull`**’d after login.
-
-#### Phase B — EC2 consumes the image (after Phase A)
-
-1. **Switch AMI** to **Ubuntu 22.04** or **AWS Deep Learning GPU AMI** / **NVIDIA-optimized AMI** that matches the **CUDA 12.4** line in the Dockerfile (watch **driver ↔ CUDA compatibility**).
-2. **Rewrite or slim `user_data.sh`** for the new OS:
-   - Install **Docker Engine** + **NVIDIA Container Toolkit**.
-   - **`docker pull`** the ECR image (needs **instance IAM** for ECR pull + **`aws ecr get-login-password`** on the instance or use **`credential_helper`** / **IAM**-based pull patterns).
-   - Optionally **stop** installing a full duplicate PyBullet venv on the host if the container is canonical.
-3. **DCV decision**:
-   - **Option 1 (simpler):** DCV + GNOME/GDM **on the Ubuntu host** (similar mental model to today’s AL2023); container only for **`docker run --gpus all`** PyBullet jobs.
-   - **Option 2 (harder):** Run DCV **inside** the container; then implement **`dcv.conf`** owner, **privileged**/cgroup behavior, and document **8443** publishing — align with the **`dcv.conf`** gap table above.
-4. **Security group**: Add **8080** if code-server is exposed; keep **8443** for DCV.
-5. **README**: Replace or narrow **Amazon Linux 2023**-specific DCV instructions (**`ec2-user`**, **`dnf`**) where the host becomes Ubuntu (**`ubuntu`** user, **`apt`**).
-
-**Acceptance criteria (Phase B):** From a client, **DCV** (and/or **code-server**) works; **`docker run --gpus all …`** runs **`nvidia-smi`** and the PyBullet smoke test inside the pulled image.
-
-#### Phase C — Hardening and cleanup
-
-1. Remove or gate **duplicate** PyBullet installs (host venv vs container) to shorten boot and avoid version skew.
-2. Pin **DCV tarball** to a versioned URL if **`latest` symlinks** cause non-reproducible builds.
-3. **Secrets**: Do not bake **ECR** or **code-server** passwords into OpenTofu state; use **SSM Parameter Store** or env from CI.
+**Acceptance for item 2:** Deleting stray test AMIs with the same tags does **not** cause OpenTofu to pick a random wrong image without **`tofu apply`** noticing (define the exact behaviour you want—in many cases **`data.aws_ami` most_recent** is still acceptable with tag discipline).
 
 ### Reference files
 
-- **`infrastructure/modules/ec2-instance/user_data.sh`** — current production bootstrap.
-- **`docker/Dockerfile`**, **`docker/entrypoint.sh`** — image definition and runtime switches.
-- **`infrastructure/local.tf`**, **`infrastructure/compute.tf`**, **`infrastructure/modules/ec2-instance/main.tf`** — how the instance is wired today.
-- **`README.md`** — **PyBullet Docker image** (above) and **TO-DO** (this section).
+- **`packer/scripts/provision-al2023.sh`** — golden AMI install steps (successor to the old cloud-init bootstrap).
+- **`packer/pybullet-al2023.pkr.hcl`** — **amazon-ebs** builder, disk, tags, provisioners.
+- **`infrastructure/packer.tf`**, **`infrastructure/compute.tf`**, **`infrastructure/data.tf`**, **`infrastructure/local.tf`**, **`infrastructure/modules/ec2-instance/main.tf`** — OpenTofu and module wiring.
+- **`.gitattributes`** — line-ending policy for Terraform and Packer files.
+- **`README.md`** — this document (single source of documentation).
 
 ## Security: instance ingress
 
@@ -282,8 +243,9 @@ You need:
 
 - **OpenTofu** (`tofu` CLI). `.tf` files still declare **`terraform { … }`** for backend and settings—that keyword is **HCL syntax** shared with OpenTofu; run plans and applies with **`tofu`**, not **`terraform`**.
 - **AWS CLI v2**.
+- **Packer** (CLI) on the machine where you run **`tofu apply`**, so **`null_resource`** can execute **`packer build`** ([install Packer](https://developer.hashicorp.com/packer/install)).
 
-In **`infrastructure/local.tf`**, **`vpc_name`** must match your VPC **`Name`** tag in AWS. Correct the tag in the EC2 VPC console if `apply` fails to find it.
+In **`infrastructure/local.tf`**, **`vpc_name`** must match your VPC **`Name`** tag in AWS. **`local.packer_ami_id_override`** may be set to an **`ami-…`** id to skip Packer during OpenTofu (see **Packer + OpenTofu (golden AMI)** earlier in this README). Correct the VPC tag in the EC2 VPC console if **`apply`** fails to find it.
 
 ### Session Manager plugin for CLI SSM sessions
 
@@ -333,11 +295,26 @@ Working directory (**contains `provider.tf` and backend config**):
 cd infrastructure
 tofu init
 tofu plan
+```
+
+If **`plan`** fails because **no golden AMI** exists yet ( **`data.aws_ami`** finds nothing), build the AMI first, then apply everything:
+
+```bash
+tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]
+tofu apply -auto-approve
+```
+
+Otherwise a single apply is enough:
+
+```bash
 tofu apply -auto-approve
 ```
 
 > [!NOTE]
 > Confirm **`provider.tf`** backend (bucket, key, **`profile`**, region) matches your account.
+
+> [!NOTE]
+> The **Packer** step can take **tens of minutes** ( **`dnf`**, **Desktop** group, **DCV** RPMs, **pip**, **reboot** on the temporary builder). The apply host must have the **`packer`** binary and network access to **AWS**.
 
 ### Outputs and example commands
 
@@ -349,6 +326,7 @@ tofu output -raw pybullet_host_public_ip
 tofu output -raw pybullet_host_instance_id
 tofu output -raw pybullet_host_subnet_id
 tofu output -raw aws_region
+tofu output -raw pybullet_golden_ami_id
 ```
 
 | Output | Use |
@@ -358,9 +336,10 @@ tofu output -raw aws_region
 | `pybullet_host_instance_id` | **SSM** target, EC2 console |
 | `pybullet_host_subnet_id` | Subnet id (routing / SSM troubleshooting) |
 | `aws_region` | Region string for **`--region`** |
+| `pybullet_golden_ami_id` | **AMI** id launched for the host (from Packer tags or **`local.packer_ami_id_override`**) |
 
 > [!NOTE]
-> **First boot** can take **a long time**. Wait until the instance is **Running**; **SSM** may show online only after boot and user-data finish.
+> **SSM** may take a few minutes after the instance is **Running**. There is **no** long cloud-init **`user_data`** install on first boot anymore; software was baked at **Packer** time. **`/var/log/packer-provision-pybullet.log`** on the instance (if present) records the **build** transcript, not each boot.
 
 ## After deploy: NICE / Amazon DCV
 
@@ -643,21 +622,18 @@ Put that CIDR **`x.x.x.x/32`** in **`allowed_ingress_cidrs`**, **`apply`** again
 
 ---
 
-### 3) First boot and user-data (DCV not listening yet)
+### 3) DCV not listening (golden AMI path)
 
-**User data installs GNOME, DCV, and may reboot**—this can exceed **many minutes**.
+With a **Packer-baked** AMI, **GNOME**, **DCV**, and **PyBullet** should already be on disk; **first boot** should **not** wait tens of minutes for **`user_data`**. If **DCV** still looks like **`CONNECTION_REFUSED`**, use **SSM** (section **2**) and treat it as a **runtime** problem (service down, wrong SG, or a **bad AMI build**).
 
-> [!IMPORTANT]
-> If **DCV** is not running yet, the browser behaves like **`CONNECTION_REFUSED`**. Prefer **SSM** (section **2**) until user data finishes—then retry DCV.
-
-On the instance (SSM shell), inspect progress and listener:
-
-```bash
-sudo tail -n 120 /var/log/cloud-init-output.log
-```
+On the instance (SSM shell), inspect the listener and services:
 
 ```bash
 sudo systemctl status dcvserver --no-pager
+```
+
+```bash
+sudo systemctl status gdm --no-pager
 ```
 
 ```bash
@@ -666,57 +642,18 @@ sudo ss -tlnp | grep 8443 || true
 
 Healthy pattern: **`dcvserver`** is **active**, and **`ss`** shows **`0.0.0.0:8443`** (or **`:::8443`**) **`LISTEN`**.
 
-Logs if the service fails:
-
 ```bash
-sudo journalctl -u dcvserver -n 80 --no-pager
+sudo journalctl -u dcvserver -u gdm -n 120 --no-pager
 ```
 
-```bash
-grep -nE 'Failed to run module scripts-user|conflicts with curl' /var/log/cloud-init-output.log | tail -20
-```
-
-```bash
-sudo tail -n 80 /var/log/user-data-pyb.log
-```
-
-#### What to expect in the logs
+#### Logs to know
 
 | Path | Role |
 |------|------|
-| **`/var/log/user-data-pyb.log`** | Full **`user_data`** transcript (**`set -x`** prints **`+`** lines). Prefer this file to verify **`dnf`** (**Desktop**, Python/build deps), DCV **`rpm`** install, **`pip`** (**PyBullet** venv), **`systemctl`** for **`dcvserver`** / **`gdm`**, and **`reboot`**. Written by **`infrastructure/modules/ec2-instance/user_data.sh`**. |
-| **`/var/log/cloud-init-output.log`** | **`cloud-init`** umbrella log. **`user_data`** failures appear as **`Failed to run module scripts-user`**. The file **appends**—old errors remain. A **successful** first full run typically ends with **`Cloud-init … finished … Up 200+ seconds`** (order of **minutes**). After **`user_data`** calls **`reboot`**, new lines like **`… finished … Up ~8 seconds`** are **normal** post-reboot **`cloud-init`**—**not** a second **`user_data`** run. |
+| **`/var/log/packer-provision-pybullet.log`** | Transcript from the **Packer** shell provisioner (**`set -x`** style output if enabled). Proves what ran **when the AMI was built**—not per boot. |
+| **`/var/log/cloud-init-output.log`** | Short **cloud-init** pass on boot; default **`user_data`** is **empty**, so you should **not** see a long **`scripts-user`** block for this stack. |
 
-**Healthy first-boot tail** (snippet—versions and IPs will differ):
-
-```text
-Successfully installed Pillow- … pybullet- … scipy- … matplotlib- …
-+ systemctl enable dcvserver
-Created symlink …/dcvserver.service …
-+ systemctl enable gdm
-+ systemctl start dcvserver
-+ reboot
-Cloud-init v. … finished at … Up 200+ seconds
-```
-
-After **`reboot`**, you may see another block like **`Cloud-init … finished … Up 8 seconds`**—that is **post-reboot** **`cloud-init`**, not a second full **`scripts-user`** pass.
-
-**Failed bootstrap**—look near the **`scripts-user`** line and earlier **`dnf`** output:
-
-```text
-package curl-minimal … conflicts with curl …
-Failed to run module scripts-user (scripts in /var/lib/cloud/instance/scripts)
-```
-
-If **`user-data-pyb.log`** ends before **`pip`**’s **`Successfully installed … pybullet`** lines, before **`systemctl start dcvserver`**, or before **`reboot`**—bootstrap did not finish; **`dcvserver`** will not serve **HTTPS :8443**.
-
-If you see **`package curl-minimal`** **conflicting** with **`curl`**, **`dnf`** may have stopped before GNOME / DCV / PyBullet ran end-to-end (**`scripts-user`** / **`scripts in /var/lib/cloud/instance/scripts`** **failed** in **`cloud-init-output.log`**).
-
-> [!IMPORTANT]
-> **Reboot alone does not fix this.** EC2 **`User data`** runs **once** on **first boot** of a **given instance**. Later boots show **`Cloud-init`** finishing in seconds with **no** long **`scripts-user`** block—you are **not** re-applying **`user_data`**. Editing **`user_data.sh`** locally or in Git does nothing on-disk until OpenTofu **creates a new instance**.
-
-> [!WARNING]
-> Older revisions of **`user_data.sh`** explicitly installed the **`curl`** RPM, which clashes with **`curl-minimal`** on Amazon Linux 2023. **Pull the latest `infrastructure/modules/ec2-instance/user_data.sh`**, **`tofu apply -auto-approve`**, then **replace** the instance so bootstrap runs cleanly again (**`apply -replace`** below is the usual fix; AMI-only refresh does **not** replay **`User data`** on the **same** instance ID).
+**Bad AMI build:** fix **`packer/scripts/provision-al2023.sh`**, **`tofu apply -auto-approve`** (triggers a new **Packer** build when hashes change), then **replace** the instance so it picks up the **new** golden AMI:
 
 ```bash
 cd infrastructure

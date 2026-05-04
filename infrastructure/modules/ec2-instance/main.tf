@@ -1,5 +1,5 @@
 resource "aws_instance" "this" {
-  ami                         = data.aws_ami.amazon_linux_2023.id
+  ami                         = var.ami_id
   instance_type               = var.instance_type
   key_name                    = var.key_name
   subnet_id                   = local.subnet_id
@@ -8,10 +8,7 @@ resource "aws_instance" "this" {
 
   vpc_security_group_ids = [aws_security_group.this.id]
   iam_instance_profile   = aws_iam_instance_profile.this.name
-  user_data = coalesce(
-    var.user_data,
-    file("${path.module}/user_data.sh")
-  )
+  user_data                = var.user_data != null ? var.user_data : ""
 
   root_block_device {
     volume_type = "gp3"

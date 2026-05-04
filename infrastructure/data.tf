@@ -9,3 +9,15 @@ data "aws_vpc" "this" {
     values = [local.vpc_name]
   }
 }
+
+# Same subnet rule as ec2-instance module: public by Name tag, scoped to vpc_name.
+data "aws_subnets" "public_in_vpc" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.this.id]
+  }
+  filter {
+    name   = "tag:Name"
+    values = ["*public*"]
+  }
+}
