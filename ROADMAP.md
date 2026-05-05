@@ -67,15 +67,15 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 ---
 
-## Phase 2 — VS Code
+## Phase 2 — VS Code (DONE)
 
-> **Priority: HIGH** — The target development workflow needs an IDE.
+> **Path A** chosen: desktop **Visual Studio Code** inside GNOME over DCV (no extra security group port).
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 2.1 | Choose install path | NOT STARTED | **Path A**: Desktop VS Code `.deb` inside GNOME (recommended — simplest). **Path B**: `code-server` on :8080 (needs SG rule + TLS) |
-| 2.2 | Install in Packer provisioner | NOT STARTED | Add to `provision-ubuntu.sh`, verify with `code --version` |
-| 2.3 | SG for code-server (Path B only) | NOT STARTED | TCP 8080 in `sg.tf`, or bind localhost + SSH tunnel |
+| 2.1 | Choose install path | DONE | Path A: Microsoft `code` package via official apt repo |
+| 2.2 | Install in Packer provisioner | DONE | `provision-ubuntu.sh`: keyring + `vscode.list` + `apt-get install code`; post-reboot `code --version` in Packer |
+| 2.3 | SG for code-server (Path B only) | N/A | Path B not used; no TCP 8080 |
 
 ---
 
@@ -113,7 +113,7 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 1. **Fix the Ubuntu Packer build** — see "Known issues" in Phase 1 above. Re-run `tofu apply -auto-approve` and diagnose if it fails.
 2. **Verify end-to-end** — once the build succeeds, check DCV login, `nvidia-smi`, PyBullet import, SSM session.
-3. **Phase 2** — Pick VS Code path (recommend Path A: desktop `.deb`), install, add SG if needed.
+3. **Phase 2** — DONE: VS Code from Microsoft apt repo; launch from GNOME in DCV.
 
 ### Key files
 
@@ -129,7 +129,7 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 ### Open design decisions
 
 1. **Desktop environment** — `ubuntu-desktop-minimal` (current) vs individual GNOME packages (`gdm3`, `gnome-session`, `gnome-terminal`) for faster/lighter builds
-2. **VS Code path** — Desktop `.deb` inside DCV (recommended) vs browser `code-server` on :8080
+2. **VS Code path** — Path A chosen (Microsoft apt `code`). Path B (`code-server` on :8080) still available if needed later.
 3. **Keep AL2023 files?** — Keep as reference or remove to reduce clutter
 
 ### Acceptance criteria
@@ -142,7 +142,7 @@ The stack is complete when all of these are true:
 | T2 | GPU available (`nvidia-smi` works) |
 | T3 | NICE DCV reachable at `https://<public-ip>:8443` |
 | T4 | PyBullet importable in `/opt/pybullet-venv` |
-| T5 | VS Code usable from the remote environment |
+| T5 | VS Code usable from the remote environment (Path A: `code` package baked in AMI) |
 | T6 | OpenTofu provisions from SSM-stored AMI id |
 | T7 | SSM Session Manager works |
 | T8 | Security group allows SSH :22 and DCV :8443 |

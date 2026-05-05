@@ -72,7 +72,7 @@ source "amazon-ebs" "pybullet_ubuntu" {
   }
 
   ami_name        = "${var.project_name}-pybullet-ubuntu2404-{{timestamp}}"
-  ami_description = "Golden Ubuntu 24.04: GNOME + DCV + PyBullet venv + NVIDIA (Packer)"
+  ami_description = "Golden Ubuntu 24.04: GNOME + VS Code + DCV + PyBullet venv + NVIDIA (Packer)"
 
   tags = {
     Project        = var.project_name
@@ -117,6 +117,8 @@ build {
       "echo '--- PyBullet ---'",
       "test -d /opt/pybullet-venv",
       "source /opt/pybullet-venv/bin/activate && python3 -c \"import pybullet as p; c=p.connect(p.DIRECT); p.disconnect(); print('PyBullet OK')\"",
+      "echo '--- VS Code ---'",
+      "code --version | head -1",
       "echo '=== All sanity checks passed ==='",
     ]
   }

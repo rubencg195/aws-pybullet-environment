@@ -1,5 +1,5 @@
 #!/bin/bash
-# Ubuntu 24.04: GNOME + Amazon DCV + PyBullet venv + NVIDIA (g4dn/g5/g6).
+# Ubuntu 24.04: GNOME + VS Code + Amazon DCV + PyBullet venv + NVIDIA (g4dn/g5/g6).
 # Baked by Packer; EC2 launches with empty user_data.
 # After first login: sudo passwd ubuntu — https://<public-ip>:8443
 
@@ -67,7 +67,18 @@ apt-get -y install \
   libgomp1 \
   curl \
   wget \
-  unzip
+  unzip \
+  ca-certificates \
+  apt-transport-https \
+  gnupg
+
+# --- Visual Studio Code (desktop; use inside DCV / GNOME — Path A) ---
+install -d /etc/apt/keyrings
+curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /etc/apt/keyrings/packages.microsoft.gpg
+chmod a+r /etc/apt/keyrings/packages.microsoft.gpg
+printf '%s\n' 'deb [arch=amd64 signed-by=/etc/apt/keyrings/packages.microsoft.gpg] https://packages.microsoft.com/repos/code stable main' > /etc/apt/sources.list.d/vscode.list
+apt-get update
+apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install code
 
 # --- Amazon DCV 2025.0 ---
 wget -qO /tmp/NICE-GPG-KEY https://d1uj6qtbmh3dt5.cloudfront.net/NICE-GPG-KEY
@@ -150,4 +161,5 @@ echo "Kernel: $(uname -r)"
 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || echo "NVIDIA: not detected (expected on non-GPU builders)"
 systemctl is-active dcvserver && echo "DCV: running" || echo "DCV: NOT running"
 source "${VENV}/bin/activate" && python3 -c "import pybullet; print('PyBullet:', pybullet.__version__)" 2>/dev/null || echo "PyBullet: import failed"
+code --version 2>/dev/null | head -1 || echo "VS Code: not found"
 echo "=== Provision complete ==="

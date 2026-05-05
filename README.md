@@ -1,6 +1,6 @@
 # aws-pybullet-environment
 
-A GPU-powered cloud workstation for robotics and ML simulation. Uses **Packer** to build a golden AMI with everything pre-installed (NVIDIA drivers, GNOME desktop, NICE DCV remote access, PyBullet), and **OpenTofu** to deploy it on AWS EC2. You connect from a browser or the DCV native app — no local GPU needed.
+A GPU-powered cloud workstation for robotics and ML simulation. Uses **Packer** to build a golden AMI with everything pre-installed (NVIDIA drivers, GNOME desktop, **Visual Studio Code**, NICE DCV remote access, PyBullet), and **OpenTofu** to deploy it on AWS EC2. You connect from a browser or the DCV native app — no local GPU needed.
 
 **OS:** Ubuntu 24.04 LTS | See [ROADMAP.md](ROADMAP.md) for the full changelog
 
@@ -128,6 +128,7 @@ flowchart TB
 | **GPU** | NVIDIA drivers installed for g4dn/g5/g6 instances |
 | **Desktop** | GNOME with GDM, Wayland disabled |
 | **Remote access** | NICE DCV 2025.0 on port 8443 (pinned + SHA256 verified) |
+| **IDE** | Visual Studio Code (`code`) from Microsoft apt repo — launch from GNOME in DCV |
 | **Simulation** | PyBullet in `/opt/pybullet-venv` with numpy, scipy, Pillow, matplotlib |
 | **Security** | SG auto-locked to your public IP, IMDSv2, encrypted gp3 volumes |
 | **Access** | SSM Session Manager for shell access (no SSH key required) |
@@ -217,6 +218,16 @@ In a terminal on the remote desktop:
 source /opt/pybullet-venv/bin/activate
 python -c "import pybullet as p; c=p.connect(p.DIRECT); print('PyBullet OK, id =', c); p.disconnect()"
 ```
+
+### 5. VS Code
+
+Open **Activities** (top-left) and search for **Visual Studio Code**, or run in a terminal:
+
+```bash
+code
+```
+
+Extensions and settings persist in your home directory under `~/.vscode` and `~/.config/Code`.
 
 ---
 
