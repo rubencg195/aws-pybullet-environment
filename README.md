@@ -137,8 +137,11 @@ flowchart TB
 | **IDE** | **Not installed** | VS Code / code-server not in the AMI |
 | **IaC** | OpenTofu + Packer | Golden AMI id stored in SSM Parameter Store |
 | **Instance access** | SSM Session Manager | `AmazonSSMManagedInstanceCore` IAM policy |
-| **Security group** | TCP 22, TCP 8443 | No TCP 8080 (code-server) yet |
+| **Security group** | TCP 22, TCP 8443, `create_before_destroy` | No TCP 8080 (code-server) yet |
 | **DCV user** | `ec2-user` | Must switch to `ubuntu` after OS migration |
+| **EBS root volume** | gp3, 80 GiB, encrypted | Tagged, `delete_on_termination = true` — no orphaned volumes |
+| **AMI cost tracking** | `snapshot_tags` + `run_tags` | Packer builder instance and snapshots tagged for cost allocation |
+| **Build sanity checks** | Post-reboot + end-of-provision | `nvidia-smi`, `dcvserver`, PyBullet import verified before AMI publish |
 
 ---
 
@@ -164,8 +167,7 @@ aws-pybullet-environment/
 │           ├── iam.tf                           # IAM role + SSM managed policy
 │           ├── data.tf                          # Subnet discovery, IAM assume-role doc
 │           ├── locals.tf                        # Subnet coalesce logic
-│           ├── outputs.tf                       # instance_id, public_ip, private_ip, etc.
-│           └── user_data.sh                     # Legacy no-op (golden AMI is fully baked)
+│           └── outputs.tf                       # instance_id, public_ip, private_ip, etc.
 │
 └── packer/                                      # Packer golden AMI build
     ├── pybullet-al2023.pkr.hcl                  # amazon-ebs builder, provisioners, post-processors
@@ -308,7 +310,7 @@ tofu output -raw aws_region
 
 ### Cost awareness
 
-Each `packer build` runs a **g5.xlarge** for 30-60+ minutes and stores a new AMI snapshot. Deregister unused AMIs and delete orphaned snapshots when iterating.
+Each `packer build` runs a **g5.xlarge** for 30-60+ minutes and stores a new AMI snapshot. Packer builder instances and snapshots are tagged with `Project` and `PyBulletPacker` for cost-allocation filtering in Cost Explorer. Deregister unused AMIs and delete orphaned snapshots when iterating.
 
 ---
 
@@ -516,6 +518,11 @@ Everything below is implemented and working:
 | 0.6 | `packer_ami_id_override` to skip Packer during development | DONE |
 | 0.7 | Architecture diagrams, deploy runbook, troubleshooting docs | DONE |
 | 0.8 | `.gitattributes` LF enforcement for .tf, .pkr.hcl, .sh | DONE |
+| 0.9 | Packer: `snapshot_tags`, `run_tags` for cost allocation; `ssh_timeout` for build robustness | DONE |
+| 0.10 | Post-reboot sanity: `nvidia-smi`, `dcvserver` status, PyBullet import verified before AMI publish | DONE |
+| 0.11 | Provision cleanup: DCV temp files removed; end-of-provision summary (kernel, GPU, DCV, PyBullet) | DONE |
+| 0.12 | EC2: root volume tagged + explicit `delete_on_termination`; SG `create_before_destroy` lifecycle | DONE |
+| 0.13 | Cleanup: removed legacy `user_data.sh`, reset `packer_ami_id_override` to null, added output descriptions | DONE |
 
 ### Phase 1 — Ubuntu LTS golden AMI (OS migration)
 
@@ -547,7 +554,7 @@ Everything below is implemented and working:
 
 | # | Task | Status | Details |
 |---|------|--------|---------|
-| 3.1 | Automated smoke test after AMI build | NOT STARTED | Launch throwaway instance from new AMI, run `systemctl is-active dcvserver`, `curl -k https://localhost:8443/`, PyBullet import. Gate SSM `put-parameter` on success. |
+| 3.1 | Automated smoke test after AMI build | PARTIAL | In-build sanity checks now run inside Packer (post-reboot: `nvidia-smi`, `dcvserver`, PyBullet import). Full external smoke test (launch throwaway instance, `curl -k https://localhost:8443/`) still not implemented. |
 | 3.2 | Slim golden image variant | NOT STARTED | Minimal GPU + PyBullet + DCV without full Desktop group. Reduces AMI size and build time. |
 | 3.3 | Acceptance test script | NOT STARTED | Runnable script (SSM or local) that validates all target criteria: DCV listening, PyBullet importable, VS Code present, GPU detected. |
 

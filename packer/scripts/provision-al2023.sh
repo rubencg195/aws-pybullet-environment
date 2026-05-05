@@ -113,8 +113,11 @@ systemctl start gdm || true
 systemctl start dcvserver
 systemctl restart dcvserver || true
 
-{
-  echo "NICE/Amazon DCV is on port 8443 (SG must allow 8443 from your client)."
-  echo "1) sudo passwd ec2-user"
-  echo "2) https://<this-host-public-ip>:8443"
-} | tee /var/log/dcv-README.txt
+rm -rf "${DCV_DIR}"
+
+echo "=== Provision summary ==="
+echo "Kernel: $(uname -r)"
+nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || echo "NVIDIA: not detected (expected on non-GPU builders)"
+systemctl is-active dcvserver && echo "DCV: running" || echo "DCV: NOT running"
+source "${VENV}/bin/activate" && python -c "import pybullet; print('PyBullet:', pybullet.__version__)" 2>/dev/null || echo "PyBullet: import failed"
+echo "=== Provision complete ==="

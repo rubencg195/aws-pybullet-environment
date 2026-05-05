@@ -59,6 +59,7 @@ source "amazon-ebs" "pybullet_al2023" {
 
   communicator            = "ssh"
   ssh_username            = "ec2-user"
+  ssh_timeout             = "10m"
   temporary_key_pair_type = "ed25519"
 
   launch_block_device_mappings {
@@ -77,6 +78,17 @@ source "amazon-ebs" "pybullet_al2023" {
     PyBulletPacker = "golden-al2023"
     Name           = "${var.project_name}-pybullet-golden"
   }
+
+  snapshot_tags = {
+    Project        = var.project_name
+    PyBulletPacker = "golden-al2023"
+    Name           = "${var.project_name}-pybullet-snapshot"
+  }
+
+  run_tags = {
+    Name    = "${var.project_name}-packer-builder"
+    Project = var.project_name
+  }
 }
 
 build {
@@ -93,11 +105,18 @@ build {
   }
 
   provisioner "shell" {
-    pause_before = "60s"
+    pause_before = "90s"
     inline = [
-      "echo 'post-reboot sanity'",
+      "echo '=== Post-reboot sanity checks ==='",
       "uname -r",
+      "echo '--- NVIDIA ---'",
+      "nvidia-smi --query-gpu=name,driver_version --format=csv,noheader || echo 'WARN: nvidia-smi failed (non-GPU builder?)'",
+      "echo '--- DCV ---'",
+      "sudo systemctl is-active dcvserver",
+      "echo '--- PyBullet ---'",
       "test -d /opt/pybullet-venv",
+      "source /opt/pybullet-venv/bin/activate && python -c \"import pybullet as p; c=p.connect(p.DIRECT); p.disconnect(); print('PyBullet OK')\"",
+      "echo '=== All sanity checks passed ==='",
     ]
   }
 

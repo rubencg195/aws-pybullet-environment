@@ -33,5 +33,6 @@ output "pybullet_host_dcv_url" {
 }
 
 output "pybullet_host_private_ip" {
-  value = module.pybullet_host.private_ip
+  description = "Private IP of the PyBullet host (for VPC-internal access)"
+  value       = module.pybullet_host.private_ip
 }
