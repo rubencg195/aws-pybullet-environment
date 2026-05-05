@@ -87,7 +87,7 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 |---|------|--------|-------|
 | 3.1 | External smoke test after AMI build | DONE | `scripts/run-acceptance.sh` curls DCV URL (TLS, `-k`) from workstation; use `--skip-external` if SG blocks your IP |
 | 3.2 | Slim golden image variant | DEFERRED | Optional cost/size win; needs a separate provision path or template (risk of breaking GNOME/DCV). Not required for Phase 3 exit |
-| 3.3 | Acceptance test script | DONE | `scripts/acceptance/on-instance-checks.sh` (SSM) + `scripts/run-acceptance.sh` (orchestrator): Ubuntu 24.04, DCV, :8443, VS Code, PyBullet, GPU `nvidia-smi` on g4/g5/g6 |
+| 3.3 | Acceptance test script | DONE | `scripts/acceptance/on-instance-checks.sh` + `scripts/run-acceptance.sh`: required checks above; GPU `nvidia-smi` warns unless `STRICT_ACCEPTANCE_GPU=1` |
 
 ---
 
