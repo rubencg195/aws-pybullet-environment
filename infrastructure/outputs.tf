@@ -5,6 +5,7 @@ output "aws_region" {
 
 output "pybullet_golden_ami_id" {
   description = "AMI id used for the PyBullet host (SSM parameter or packer_ami_id_override)"
+  sensitive   = true
   value       = local.packer_ami_id_override != null ? local.packer_ami_id_override : data.aws_ssm_parameter.golden_ami_id[0].value
 }
 
