@@ -24,6 +24,9 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Packer
+packer/packer-manifest.json
+
 # Terraform / OpenTofu
 **/.terraform/
 *.tfstate
