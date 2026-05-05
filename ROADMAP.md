@@ -101,8 +101,8 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 | 4.2 | AMI / snapshot lifecycle | NOT STARTED | Auto-deregister old AMIs, cost alerts |
 | 4.3 | CI/CD for Packer builds | NOT STARTED | GitHub Actions or CodeBuild |
 | 4.4 | SSM parameter hardening | NOT STARTED | `SecureString` with KMS |
-| 4.5 | Builder vs runtime instance type alignment | NOT STARTED | Document driver compatibility |
-| 4.6 | Root device mapping validation | NOT STARTED | Validate `/dev/xvda` across OS versions |
+| 4.5 | Builder vs runtime instance type alignment | DONE | README **Production notes**: match Packer `builder_instance_type` to `ec2_instance_type` (same GPU family) |
+| 4.6 | Root device mapping validation | DONE | README **Production notes**: Ubuntu `/dev/sda1` in Packer vs AL2023 `/dev/xvda`; EC2 module uses AMI root device |
 | 4.7 | Optional container runtime | NOT STARTED | Docker/ECR only if needed |
 
 ---

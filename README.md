@@ -297,6 +297,24 @@ Each Packer build runs a **g5.xlarge** for 30-60+ minutes and creates an AMI sna
 
 Clean up old AMIs and snapshots when iterating — they accumulate fast.
 
+**Stop the instance when idle:** Stopping the VM stops **compute** billing; the root gp3 volume still costs storage. Example (replace id/region/profile as needed):
+
+```bash
+aws ec2 stop-instances --instance-ids "$(cd infrastructure && tofu output -raw pybullet_host_instance_id)" \
+  --region "$(cd infrastructure && tofu output -raw aws_region)" --profile personal
+```
+
+The next `tofu apply` may start it again if OpenTofu reconciles desired state to **running**. To work only when you need the box, stop after use and run `apply` when you want it back online.
+
+---
+
+## Production notes (Phase 4.5–4.6)
+
+| Topic | Detail |
+|--------|--------|
+| **Builder vs runtime GPU** | Keep Packer `builder_instance_type` (`packer/pybullet-ubuntu.pkr.hcl`, default `g5.xlarge`) aligned with `ec2_instance_type` in `infrastructure/local.tf` (same **family**, e.g. g5). Mismatch can cause extra DKMS churn or driver surprises. |
+| **Root volume device name** | Ubuntu golden AMI mapping uses **`/dev/sda1`** in Packer. Legacy AL2023 used **`/dev/xvda`**. The EC2 module’s `root_block_device` omits `device_name` so the **AMI’s** root device is used automatically at launch. |
+
 ---
 
 ## Rebuild Triggers
