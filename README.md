@@ -265,6 +265,12 @@ This waits for SSM, runs `scripts/acceptance/on-instance-checks.sh` on the insta
 ./scripts/run-acceptance.sh --skip-external
 ```
 
+Hard-fail when `nvidia-smi` is missing on GPU instance types:
+
+```bash
+STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh
+```
+
 ---
 
 ## Clipboard (Windows ↔ DCV)

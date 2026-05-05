@@ -10,6 +10,9 @@ for arg in "$@"; do
     -h|--help)
       echo "Usage: $0 [--skip-external]"
       echo "  --skip-external  Do not curl the public DCV URL (useful if IP/SG blocks this machine)."
+      echo ""
+      echo "Environment:"
+      echo "  STRICT_ACCEPTANCE_GPU=1  Fail the run if nvidia-smi does not work on g4/g5/g6 (default: warn only)."
       exit 0
       ;;
   esac
@@ -59,15 +62,20 @@ for i in $(seq 1 36); do
   fi
 done
 
+STRICT_GPU="${STRICT_ACCEPTANCE_GPU:-0}"
+[[ "${STRICT_GPU}" == "1" ]] || STRICT_GPU=0
+
 CLI_INPUT="$(
-  REMOTE_SCRIPT_PATH="${REMOTE_SCRIPT}" INSTANCE_ID="${INSTANCE_ID}" python3 -c "
+  REMOTE_SCRIPT_PATH="${REMOTE_SCRIPT}" INSTANCE_ID="${INSTANCE_ID}" STRICT_ACCEPTANCE_GPU="${STRICT_GPU}" python3 -c "
 import base64, json, os, pathlib
 p = pathlib.Path(os.environ['REMOTE_SCRIPT_PATH'])
 b64 = base64.b64encode(p.read_bytes()).decode('ascii')
+strict = os.environ.get('STRICT_ACCEPTANCE_GPU', '0')
+prefix = f'export STRICT_ACCEPTANCE_GPU={strict}; '
 print(json.dumps({
   'InstanceIds': [os.environ['INSTANCE_ID']],
   'DocumentName': 'AWS-RunShellScript',
-  'Parameters': {'commands': [f'echo {b64} | base64 -d | bash']},
+  'Parameters': {'commands': [prefix + f'echo {b64} | base64 -d | bash']},
 }))
 "
 )"
