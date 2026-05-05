@@ -7,21 +7,33 @@ set -euxo pipefail
 exec > >(tee /var/log/packer-provision-pybullet.log) 2>&1
 
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
+mkdir -p /etc/needrestart/conf.d
+echo '$nrconf{restart} = "a";' > /etc/needrestart/conf.d/99-autorestart.conf
 
 apt-get update
-apt-get -y upgrade
+apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
 
-# --- NVIDIA drivers (GPU instances only) ---
+# Detect GPU instance type via IMDSv2
 IMDS_TOKEN="$(curl -fsS --max-time 2 -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 300' http://169.254.169.254/latest/api/token || echo "")"
 INSTANCE_TYPE="$(curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" http://169.254.169.254/latest/meta-data/instance-type || echo "")"
 if [ -z "${INSTANCE_TYPE}" ]; then
   echo "WARNING: Could not detect instance type via IMDS. NVIDIA driver install may be skipped."
 fi
+
+# Install headers for the NEWEST kernel (the one that will run after reboot),
+# not just the currently running one. apt-get upgrade may have installed a newer kernel.
+NEWEST_KERNEL="$(ls -1 /boot/vmlinuz-* | sort -V | tail -1 | sed 's|/boot/vmlinuz-||')"
+echo "Running kernel: $(uname -r)  |  Newest installed kernel: ${NEWEST_KERNEL}"
+
+# --- NVIDIA drivers (GPU instances only) ---
 case "${INSTANCE_TYPE}" in
   g4dn*|g5*|g6*)
-    apt-get -y install linux-headers-$(uname -r) build-essential dkms
+    apt-get -y install "linux-headers-${NEWEST_KERNEL}" build-essential dkms
     apt-get -y install ubuntu-drivers-common
     ubuntu-drivers install --gpgpu
+    dkms autoinstall -k "${NEWEST_KERNEL}" || true
     ;;
   *)
     echo "Skipping NVIDIA packages (instance type: ${INSTANCE_TYPE:-unknown})."
@@ -29,7 +41,7 @@ case "${INSTANCE_TYPE}" in
 esac
 
 # --- Desktop environment ---
-apt-get -y install ubuntu-desktop-minimal
+apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install ubuntu-desktop-minimal
 install -d /etc/gdm3
 touch /etc/gdm3/custom.conf
 if ! grep -qF 'WaylandEnable=false' /etc/gdm3/custom.conf; then
@@ -51,7 +63,7 @@ apt-get -y install \
   g++ \
   make \
   git \
-  libgl1-mesa-glx \
+  libgl1 \
   libgomp1 \
   curl \
   wget \

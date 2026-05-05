@@ -2,7 +2,7 @@
 
 A GPU-powered cloud workstation for robotics and ML simulation. Uses **Packer** to build a golden AMI with everything pre-installed (NVIDIA drivers, GNOME desktop, NICE DCV remote access, PyBullet), and **OpenTofu** to deploy it on AWS EC2. You connect from a browser or the DCV native app — no local GPU needed.
 
-**OS:** Ubuntu 24.04 LTS (migration in progress — see [ROADMAP.md](ROADMAP.md) for status and known issues)
+**OS:** Ubuntu 24.04 LTS | See [ROADMAP.md](ROADMAP.md) for the full changelog
 
 ---
 

@@ -57,10 +57,11 @@ source "amazon-ebs" "pybullet_ubuntu" {
     most_recent = true
   }
 
-  communicator            = "ssh"
-  ssh_username            = "ubuntu"
-  ssh_timeout             = "10m"
-  temporary_key_pair_type = "ed25519"
+  communicator              = "ssh"
+  ssh_username              = "ubuntu"
+  ssh_timeout               = "10m"
+  ssh_read_write_timeout    = "30m"
+  temporary_key_pair_type   = "ed25519"
 
   launch_block_device_mappings {
     device_name           = "/dev/sda1"

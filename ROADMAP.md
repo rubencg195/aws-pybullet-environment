@@ -38,39 +38,32 @@ The current working stack. Everything here is deployed and verified.
 
 ---
 
-## Phase 1 — Ubuntu LTS Golden AMI (IN PROGRESS)
+## Phase 1 — Ubuntu LTS Golden AMI (DONE)
 
-Migrating from Amazon Linux 2023 to Ubuntu 24.04 LTS. All files are created and wired; the Packer build has not yet completed successfully.
+Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-to-end.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
 | 1.1 | Create `packer/pybullet-ubuntu.pkr.hcl` | DONE | Canonical 24.04 AMI filter, `ssh_username = "ubuntu"`, `/dev/sda1` root device |
 | 1.2 | Create `packer/scripts/provision-ubuntu.sh` | DONE | `apt`-based: `ubuntu-desktop-minimal`, NVIDIA via `ubuntu-drivers`, DCV `.deb`, `/opt/pybullet-venv` |
-| 1.3 | NVIDIA drivers on Ubuntu | DONE | `ubuntu-drivers install --gpgpu` (removed hardcoded `nvidia-utils-570` — was causing version mismatch with driver 595) |
+| 1.3 | NVIDIA drivers on Ubuntu | DONE | `ubuntu-drivers install --gpgpu` + DKMS autoinstall against newest kernel |
 | 1.4 | DCV for Ubuntu | DONE | Ubuntu 24.04 `.deb` packages (`nice-dcv-ubuntu2404-x86_64.tgz`), pinned SHA256, `dcv.conf` owner = `ubuntu` |
-| 1.5 | Wire `infrastructure/packer.tf` to new template | DONE | Triggers point to `pybullet-ubuntu.pkr.hcl` and `provision-ubuntu.sh`; `packer init` targets specific file (fixed duplicate-variable error from having both `.pkr.hcl` files in same dir) |
+| 1.5 | Wire `infrastructure/packer.tf` to new template | DONE | Triggers point to `pybullet-ubuntu.pkr.hcl` and `provision-ubuntu.sh` |
 | 1.6 | Update all `ec2-user` references to `ubuntu` | DONE | `dcv.conf`, `.bashrc`, README, TROUBLESHOOTING.md, SETUP.md |
-| 1.7 | SSM agent on Ubuntu | DONE | Preinstalled on Canonical Ubuntu 24.04 AMIs |
-| 1.8 | End-to-end Packer build + deploy | PENDING | **See known issues below** |
+| 1.7 | SSM agent on Ubuntu | DONE | Preinstalled on Canonical Ubuntu 24.04 AMIs; verified working |
+| 1.8 | End-to-end Packer build + deploy | DONE | AMI `ami-0b3df7a8e60df839f`, ~31 min build, verified DCV + PyBullet + SSM |
 
-### Known issues to fix before next build
+### Issues fixed during migration
 
-1. **Packer build did not complete** — the build ran for ~11 minutes and failed during the `ubuntu-desktop-minimal` apt install (828 packages). The terminal output was truncated at ~1 MB so the actual error was not captured. Likely causes:
-   - The massive `ubuntu-desktop-minimal` install may trigger a `systemctl` call that fails under Packer's SSH session (e.g., `deb-systemd-invoke` errors seen in logs). Combined with `set -euxo pipefail`, this could abort the script.
-   - Possible SSH read timeout if the install goes quiet for too long during DKMS compilation.
-
-2. **Fix applied but not yet tested**: removed the hardcoded `apt-get -y install nvidia-utils-570` which was pulling in nvidia-utils-580 on top of the nvidia-595-server driver that `ubuntu-drivers install --gpgpu` already set up.
-
-3. **Duplicate Packer variable error** (fixed): both `pybullet-al2023.pkr.hcl` and `pybullet-ubuntu.pkr.hcl` live in the same `packer/` directory. Running `packer init .` picked up both files and hit duplicate variable definitions. Fixed by changing `packer init .` to `packer init pybullet-ubuntu.pkr.hcl` in `packer.tf`.
-
-### Recommended next steps
-
-- Re-run `tofu apply -auto-approve` and monitor the Packer build output.
-- If the build fails again during `ubuntu-desktop-minimal`, consider:
-  - Adding `|| true` after the apt install to tolerate non-fatal post-install script errors, then verify services work in the post-reboot sanity checks.
-  - Switching from `ubuntu-desktop-minimal` to individual packages (`gdm3`, `gnome-session`, `gnome-terminal`, `nautilus`) for a lighter install.
-  - Adding `ssh_read_write_timeout = "30m"` to the Packer template if SSH is timing out during long installs.
-- Once the build succeeds, verify end-to-end: DCV login, `nvidia-smi`, PyBullet import, SSM session.
+| Issue | Fix |
+|-------|-----|
+| Duplicate Packer variable error (both `.pkr.hcl` files in same dir) | `packer init` targets specific file instead of `.` |
+| `ubuntu-desktop-minimal` install failed silently | Suppressed `needrestart` interactive prompts with `NEEDRESTART_MODE=a` and config |
+| `libgl1-mesa-glx` removed in Ubuntu 24.04 | Replaced with `libgl1` |
+| `nvidia-utils-570` conflicted with `ubuntu-drivers` (installed 595) | Removed hardcoded version — let `ubuntu-drivers` handle everything |
+| NVIDIA DKMS modules not built for post-upgrade kernel | Install headers for newest kernel + `dkms autoinstall -k` against it |
+| Dpkg config prompts during upgrade | Added `--force-confdef --force-confold` to all `apt-get` calls |
+| Packer SSH timeout during long installs | Added `ssh_read_write_timeout = "30m"` to template |
 
 ---
 
