@@ -6,7 +6,7 @@ Common issues and how to fix them. All commands assume you're in the `infrastruc
 
 ## Acceptance script warns: nvidia-smi failed on a GPU instance
 
-The AMI may have been built when a different kernel was “newest” than the one that booted at runtime, so DKMS modules might not load. Rebuild the golden AMI (`tofu apply` after changing the provision script) or replace the instance: `tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'`. To **fail** the acceptance run when `nvidia-smi` is missing, set `STRICT_ACCEPTANCE_GPU=1` when invoking SSM (see `scripts/acceptance/on-instance-checks.sh`).
+The AMI may have been built when a different kernel was “newest” than the one that booted at runtime, so DKMS modules might not load. Rebuild the golden AMI (`tofu apply` after changing the provision script) or replace the instance: `tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'`. To **fail** the acceptance run when `nvidia-smi` is missing, run `STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh` (or export the variable before `scripts/acceptance/on-instance-checks.sh` on the instance).
 
 ---
 
