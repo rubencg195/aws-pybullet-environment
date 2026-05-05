@@ -50,6 +50,30 @@ flowchart LR
   DCVC --> EC2
 ```
 
+### DevOps flow
+
+```mermaid
+flowchart TD
+  DEV["Developer edits\nlocal.tf / provision script / Packer template"]
+  DEV -->|"git push"| REPO["GitHub repo"]
+  DEV -->|"tofu apply"| PLAN{"OpenTofu detects\nfile hash changes?"}
+
+  PLAN -->|No changes| SKIP["Skip Packer\n→ EC2 already up to date"]
+  PLAN -->|Files changed| BUILD["Packer spins up\ntemporary g5.xlarge"]
+
+  BUILD --> PROVISION["provision-al2023.sh\n1. dnf update\n2. NVIDIA drivers\n3. GNOME + GDM\n4. DCV install + config\n5. PyBullet venv"]
+  PROVISION --> REBOOT["Reboot + sanity checks\nnvidia-smi, dcvserver,\nPyBullet import"]
+  REBOOT -->|Pass| SNAPSHOT["Create AMI snapshot"]
+  REBOOT -->|Fail| ABORT["Build fails\n→ no broken AMI published"]
+
+  SNAPSHOT --> PUBLISH["publish-ami-ssm.sh\n→ SSM Parameter Store"]
+  PUBLISH --> DEPLOY["OpenTofu reads SSM\n→ launches EC2 with new AMI"]
+
+  DEPLOY --> SG["Security group\nauto-locked to your IP"]
+  DEPLOY --> IAM["IAM role\n+ SSM Session Manager"]
+  DEPLOY --> LIVE["Instance ready\n→ DCV on :8443"]
+```
+
 ### What's inside the infrastructure
 
 ```mermaid
