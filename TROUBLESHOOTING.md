@@ -4,6 +4,18 @@ Common issues and how to fix them. All commands assume you're in the `infrastruc
 
 ---
 
+## Acceptance script warns: nvidia-smi failed on a GPU instance
+
+The AMI may have been built when a different kernel was “newest” than the one that booted at runtime, so DKMS modules might not load. Rebuild the golden AMI (`tofu apply` after changing the provision script) or replace the instance: `tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'`. To **fail** the acceptance run when `nvidia-smi` is missing, set `STRICT_ACCEPTANCE_GPU=1` when invoking SSM (see `scripts/acceptance/on-instance-checks.sh`).
+
+---
+
+## Acceptance script hangs on "Waiting for SSM agent"
+
+`scripts/run-acceptance.sh` defaults to `AWS_PROFILE=personal`. If your credentials use another profile, run `AWS_PROFILE=yourprofile ./scripts/run-acceptance.sh`. Ensure the instance has the SSM IAM policy and that `aws ssm describe-instance-information` lists the instance as **Online**.
+
+---
+
 ## DCV: "This site can't be reached" / connection timeout
 
 **1. Check the instance's current public IP** (it changes on stop/start):

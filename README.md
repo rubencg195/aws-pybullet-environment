@@ -251,6 +251,20 @@ tofu apply -auto-approve
 tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'
 ```
 
+### Acceptance tests (Phase 3)
+
+From the **repository root**, with OpenTofu initialized. The runner defaults to `AWS_PROFILE=personal` (override if your `provider.tf` uses another profile):
+
+```bash
+./scripts/run-acceptance.sh
+```
+
+This waits for SSM, runs `scripts/acceptance/on-instance-checks.sh` on the instance (Ubuntu 24.04, DCV, VS Code, PyBullet; `nvidia-smi` on g4/g5/g6 is a **warning** unless `STRICT_ACCEPTANCE_GPU=1`), then optionally `curl`s your public DCV URL. If your laptop’s IP is not in the security group, use:
+
+```bash
+./scripts/run-acceptance.sh --skip-external
+```
+
 ---
 
 ## Clipboard (Windows ↔ DCV)
@@ -298,6 +312,10 @@ aws-pybullet-environment/
 ├── SETUP.md                         # Tool installation and IAM setup
 ├── TROUBLESHOOTING.md               # Common issues and fixes
 ├── ROADMAP.md                       # What's done, what's next, dev guide
+├── scripts/
+│   ├── run-acceptance.sh            # Workstation: SSM + optional DCV curl (Phase 3)
+│   └── acceptance/
+│       └── on-instance-checks.sh    # Runs on EC2 via SSM; can also run manually
 ├── .gitattributes                   # LF enforcement for .tf, .pkr.hcl, .sh
 │
 ├── infrastructure/                  # OpenTofu root module
@@ -330,4 +348,4 @@ aws-pybullet-environment/
 
 - **[SETUP.md](SETUP.md)** — How to install Packer, the SSM plugin, and what IAM permissions you need
 - **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — DCV connection issues, OpenTofu errors, SSM problems
-- **[ROADMAP.md](ROADMAP.md)** — What's been done, the Ubuntu migration plan, and where to contribute next
+- **[ROADMAP.md](ROADMAP.md)** — Phases 0–4, acceptance testing, and future work

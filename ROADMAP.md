@@ -79,15 +79,15 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 ---
 
-## Phase 3 — Quality and Testing
+## Phase 3 — Quality and Testing (DONE)
 
 > **Priority: MEDIUM**
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 3.1 | External smoke test after AMI build | PARTIAL | In-build checks exist (post-reboot). Full test (launch throwaway instance, curl DCV) not yet done |
-| 3.2 | Slim golden image variant | NOT STARTED | Minimal GPU + PyBullet + DCV without full Desktop group |
-| 3.3 | Acceptance test script | NOT STARTED | Validates all criteria: DCV, PyBullet, VS Code, GPU |
+| 3.1 | External smoke test after AMI build | DONE | `scripts/run-acceptance.sh` curls DCV URL (TLS, `-k`) from workstation; use `--skip-external` if SG blocks your IP |
+| 3.2 | Slim golden image variant | DEFERRED | Optional cost/size win; needs a separate provision path or template (risk of breaking GNOME/DCV). Not required for Phase 3 exit |
+| 3.3 | Acceptance test script | DONE | `scripts/acceptance/on-instance-checks.sh` (SSM) + `scripts/run-acceptance.sh` (orchestrator): Ubuntu 24.04, DCV, :8443, VS Code, PyBullet, GPU `nvidia-smi` on g4/g5/g6 |
 
 ---
 
@@ -111,9 +111,9 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 ### Where to start
 
-1. **Fix the Ubuntu Packer build** — see "Known issues" in Phase 1 above. Re-run `tofu apply -auto-approve` and diagnose if it fails.
-2. **Verify end-to-end** — once the build succeeds, check DCV login, `nvidia-smi`, PyBullet import, SSM session.
-3. **Phase 2** — DONE: VS Code from Microsoft apt repo; launch from GNOME in DCV.
+1. **Deploy** — `cd infrastructure && tofu apply -auto-approve`
+2. **Acceptance tests** — from repo root: `./scripts/run-acceptance.sh` (SSM + optional external DCV curl)
+3. **Manual** — DCV login, `nvidia-smi`, PyBullet, VS Code from GNOME
 
 ### Key files
 
@@ -124,6 +124,8 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 - `packer/pybullet-al2023.pkr.hcl` — AL2023 AMI builder (legacy reference)
 - `packer/scripts/provision-al2023.sh` — AL2023 provisioner (legacy reference)
 - `packer/scripts/publish-ami-ssm.sh` — SSM publish script (shared by both templates)
+- `scripts/run-acceptance.sh` — Phase 3 orchestrator (SSM + external DCV smoke)
+- `scripts/acceptance/on-instance-checks.sh` — on-instance checks (invoked by runner)
 - `infrastructure/modules/ec2-instance/sg.tf` — security group rules
 
 ### Open design decisions
