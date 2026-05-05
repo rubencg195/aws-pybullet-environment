@@ -2,7 +2,7 @@
 
 A GPU-powered cloud workstation for robotics and ML simulation. Uses **Packer** to build a golden AMI with everything pre-installed (NVIDIA drivers, GNOME desktop, NICE DCV remote access, PyBullet), and **OpenTofu** to deploy it on AWS EC2. You connect from a browser or the DCV native app — no local GPU needed.
 
-**Current OS:** Amazon Linux 2023 | **Target:** Ubuntu LTS (see [ROADMAP.md](ROADMAP.md))
+**OS:** Ubuntu 24.04 LTS (migration in progress — see [ROADMAP.md](ROADMAP.md) for status and known issues)
 
 ---
 
@@ -61,7 +61,7 @@ flowchart TD
   PLAN -->|No changes| SKIP["Skip Packer\n→ EC2 already up to date"]
   PLAN -->|Files changed| BUILD["Packer spins up\ntemporary g5.xlarge"]
 
-  BUILD --> PROVISION["provision-al2023.sh\n1. dnf update\n2. NVIDIA drivers\n3. GNOME + GDM\n4. DCV install + config\n5. PyBullet venv"]
+  BUILD --> PROVISION["provision-ubuntu.sh\n1. apt upgrade\n2. NVIDIA drivers\n3. GNOME + GDM\n4. DCV install + config\n5. PyBullet venv"]
   PROVISION --> REBOOT["Reboot + sanity checks\nnvidia-smi, dcvserver,\nPyBullet import"]
   REBOOT -->|Pass| SNAPSHOT["Create AMI snapshot"]
   REBOOT -->|Fail| ABORT["Build fails\n→ no broken AMI published"]
@@ -86,8 +86,8 @@ flowchart TB
   end
 
   subgraph packer["Packer AMI Pipeline"]
-    SRC["AL2023 base AMI"]
-    PROV["provision-al2023.sh\nNVIDIA + GNOME + DCV + PyBullet"]
+    SRC["Ubuntu 24.04 base AMI"]
+    PROV["provision-ubuntu.sh\nNVIDIA + GNOME + DCV + PyBullet"]
     REBOOT["reboot + sanity checks"]
     POST["manifest → publish to SSM"]
   end
@@ -124,7 +124,7 @@ flowchart TB
 
 | Component | Details |
 |-----------|---------|
-| **OS** | Amazon Linux 2023 (Ubuntu LTS planned) |
+| **OS** | Ubuntu 24.04 LTS |
 | **GPU** | NVIDIA drivers installed for g4dn/g5/g6 instances |
 | **Desktop** | GNOME with GDM, Wayland disabled |
 | **Remote access** | NICE DCV 2025.0 on port 8443 (pinned + SHA256 verified) |
@@ -198,7 +198,7 @@ aws ssm start-session \
 Then inside the SSM session:
 
 ```bash
-sudo passwd ec2-user
+sudo passwd ubuntu
 ```
 
 **Open DCV in your browser:**
@@ -207,7 +207,7 @@ sudo passwd ec2-user
 tofu output -raw pybullet_host_dcv_url
 ```
 
-Go to the URL, accept the self-signed certificate, and log in as `ec2-user` with the password you just set.
+Go to the URL, accept the self-signed certificate, and log in as `ubuntu` with the password you just set.
 
 ### 4. Verify PyBullet
 
@@ -271,8 +271,8 @@ Clean up old AMIs and snapshots when iterating — they accumulate fast.
 ## Rebuild Triggers
 
 Packer re-runs automatically when `tofu apply` detects changes in:
-- `packer/pybullet-al2023.pkr.hcl`
-- `packer/scripts/provision-al2023.sh`
+- `packer/pybullet-ubuntu.pkr.hcl`
+- `packer/scripts/provision-ubuntu.sh`
 - `packer/scripts/publish-ami-ssm.sh`
 
 Or when the SSM parameter name changes.
@@ -307,9 +307,9 @@ aws-pybullet-environment/
 │           └── outputs.tf           # Module outputs
 │
 └── packer/                          # Golden AMI build
-    ├── pybullet-al2023.pkr.hcl      # Packer template
+    ├── pybullet-ubuntu.pkr.hcl      # Packer template (Ubuntu 24.04)
     └── scripts/
-        ├── provision-al2023.sh      # Install script (NVIDIA, GNOME, DCV, PyBullet)
+        ├── provision-ubuntu.sh       # Install script (NVIDIA, GNOME, DCV, PyBullet)
         └── publish-ami-ssm.sh       # Publishes AMI id to SSM Parameter Store
 ```
 

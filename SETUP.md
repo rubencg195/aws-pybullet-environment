@@ -62,7 +62,7 @@ packer validate \
   -var "subnet_id=subnet-YOURVALUE" \
   -var "project_name=aws-pybullet-environment" \
   -var "aws_cli_profile=personal" \
-  pybullet-al2023.pkr.hcl
+  pybullet-ubuntu.pkr.hcl
 ```
 
 ---

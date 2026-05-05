@@ -38,19 +38,39 @@ The current working stack. Everything here is deployed and verified.
 
 ---
 
-## Phase 1 — Ubuntu LTS Golden AMI
+## Phase 1 — Ubuntu LTS Golden AMI (IN PROGRESS)
 
-> **Priority: HIGH** — This is the main migration that unblocks everything else.
+Migrating from Amazon Linux 2023 to Ubuntu 24.04 LTS. All files are created and wired; the Packer build has not yet completed successfully.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 1.1 | Create `packer/pybullet-ubuntu.pkr.hcl` | NOT STARTED | New `source_ami_filter` for Ubuntu 22.04 or 24.04, `ssh_username = "ubuntu"` |
-| 1.2 | Create `packer/scripts/provision-ubuntu.sh` | NOT STARTED | `apt`-based: kernel headers, build tools, NVIDIA, GNOME, DCV `.deb`, `/opt/pybullet-venv` |
-| 1.3 | NVIDIA drivers on Ubuntu | NOT STARTED | `ubuntu-drivers autoinstall` or NVIDIA CUDA repo. Validate on g5 builder |
-| 1.4 | DCV for Ubuntu | NOT STARTED | Ubuntu `.deb` packages, pin URL + SHA256, `dcv.conf` owner = `ubuntu` |
-| 1.5 | Wire `infrastructure/packer.tf` to new template | NOT STARTED | Update `local-exec`, `triggers`, AMI tags |
-| 1.6 | Update all `ec2-user` references to `ubuntu` | NOT STARTED | `dcv.conf`, `.bashrc`, README, SSM examples |
-| 1.7 | SSM agent on Ubuntu | NOT STARTED | Usually preinstalled on Canonical AMIs |
+| 1.1 | Create `packer/pybullet-ubuntu.pkr.hcl` | DONE | Canonical 24.04 AMI filter, `ssh_username = "ubuntu"`, `/dev/sda1` root device |
+| 1.2 | Create `packer/scripts/provision-ubuntu.sh` | DONE | `apt`-based: `ubuntu-desktop-minimal`, NVIDIA via `ubuntu-drivers`, DCV `.deb`, `/opt/pybullet-venv` |
+| 1.3 | NVIDIA drivers on Ubuntu | DONE | `ubuntu-drivers install --gpgpu` (removed hardcoded `nvidia-utils-570` — was causing version mismatch with driver 595) |
+| 1.4 | DCV for Ubuntu | DONE | Ubuntu 24.04 `.deb` packages (`nice-dcv-ubuntu2404-x86_64.tgz`), pinned SHA256, `dcv.conf` owner = `ubuntu` |
+| 1.5 | Wire `infrastructure/packer.tf` to new template | DONE | Triggers point to `pybullet-ubuntu.pkr.hcl` and `provision-ubuntu.sh`; `packer init` targets specific file (fixed duplicate-variable error from having both `.pkr.hcl` files in same dir) |
+| 1.6 | Update all `ec2-user` references to `ubuntu` | DONE | `dcv.conf`, `.bashrc`, README, TROUBLESHOOTING.md, SETUP.md |
+| 1.7 | SSM agent on Ubuntu | DONE | Preinstalled on Canonical Ubuntu 24.04 AMIs |
+| 1.8 | End-to-end Packer build + deploy | PENDING | **See known issues below** |
+
+### Known issues to fix before next build
+
+1. **Packer build did not complete** — the build ran for ~11 minutes and failed during the `ubuntu-desktop-minimal` apt install (828 packages). The terminal output was truncated at ~1 MB so the actual error was not captured. Likely causes:
+   - The massive `ubuntu-desktop-minimal` install may trigger a `systemctl` call that fails under Packer's SSH session (e.g., `deb-systemd-invoke` errors seen in logs). Combined with `set -euxo pipefail`, this could abort the script.
+   - Possible SSH read timeout if the install goes quiet for too long during DKMS compilation.
+
+2. **Fix applied but not yet tested**: removed the hardcoded `apt-get -y install nvidia-utils-570` which was pulling in nvidia-utils-580 on top of the nvidia-595-server driver that `ubuntu-drivers install --gpgpu` already set up.
+
+3. **Duplicate Packer variable error** (fixed): both `pybullet-al2023.pkr.hcl` and `pybullet-ubuntu.pkr.hcl` live in the same `packer/` directory. Running `packer init .` picked up both files and hit duplicate variable definitions. Fixed by changing `packer init .` to `packer init pybullet-ubuntu.pkr.hcl` in `packer.tf`.
+
+### Recommended next steps
+
+- Re-run `tofu apply -auto-approve` and monitor the Packer build output.
+- If the build fails again during `ubuntu-desktop-minimal`, consider:
+  - Adding `|| true` after the apt install to tolerate non-fatal post-install script errors, then verify services work in the post-reboot sanity checks.
+  - Switching from `ubuntu-desktop-minimal` to individual packages (`gdm3`, `gnome-session`, `gnome-terminal`, `nautilus`) for a lighter install.
+  - Adding `ssh_read_write_timeout = "30m"` to the Packer template if SSH is timing out during long installs.
+- Once the build succeeds, verify end-to-end: DCV login, `nvidia-smi`, PyBullet import, SSM session.
 
 ---
 
@@ -98,38 +118,26 @@ The current working stack. Everything here is deployed and verified.
 
 ### Where to start
 
-1. **Get the current baseline working first** — configure `local.tf`, run `tofu apply`, verify DCV + PyBullet.
-2. **Phase 1.1–1.2** — Create Ubuntu Packer template alongside the AL2023 one. Don't modify the working AL2023 files.
-3. **Phase 1.3–1.4** — Get NVIDIA and DCV working on Ubuntu. This is the hardest part.
-4. **Phase 1.5–1.7** — Wire OpenTofu to the new template, update user references, verify SSM.
-5. **Phase 2** — Pick VS Code path (recommend Path A: desktop `.deb`), install, add SG if needed.
+1. **Fix the Ubuntu Packer build** — see "Known issues" in Phase 1 above. Re-run `tofu apply -auto-approve` and diagnose if it fails.
+2. **Verify end-to-end** — once the build succeeds, check DCV login, `nvidia-smi`, PyBullet import, SSM session.
+3. **Phase 2** — Pick VS Code path (recommend Path A: desktop `.deb`), install, add SG if needed.
 
-### Key files to read first
+### Key files
 
 - `infrastructure/local.tf` — all configurable settings
 - `infrastructure/packer.tf` — how Packer integrates with OpenTofu
-- `packer/pybullet-al2023.pkr.hcl` — current AMI builder (use as a pattern for Ubuntu)
-- `packer/scripts/provision-al2023.sh` — current provisioner (reference for Ubuntu)
-- `packer/scripts/publish-ami-ssm.sh` — SSM publish script (reusable as-is)
+- `packer/pybullet-ubuntu.pkr.hcl` — Ubuntu 24.04 AMI builder (active)
+- `packer/scripts/provision-ubuntu.sh` — Ubuntu provisioner (active)
+- `packer/pybullet-al2023.pkr.hcl` — AL2023 AMI builder (legacy reference)
+- `packer/scripts/provision-al2023.sh` — AL2023 provisioner (legacy reference)
+- `packer/scripts/publish-ami-ssm.sh` — SSM publish script (shared by both templates)
 - `infrastructure/modules/ec2-instance/sg.tf` — security group rules
-
-### Files to create for Ubuntu + VS Code
-
-| Action | File |
-|--------|------|
-| Create | `packer/pybullet-ubuntu.pkr.hcl` |
-| Create | `packer/scripts/provision-ubuntu.sh` |
-| Modify | `infrastructure/packer.tf` (point to new template) |
-| Modify | `infrastructure/modules/ec2-instance/sg.tf` (if code-server) |
-| Modify | `README.md` (update user, OS references) |
 
 ### Open design decisions
 
-1. **Ubuntu version** — 22.04 LTS (mature DCV support) vs 24.04 LTS (newer, needs DCV check)
-2. **NVIDIA method** — `ubuntu-drivers autoinstall` (simpler) vs NVIDIA CUDA repo (more control)
-3. **Desktop environment** — Full GNOME vs lighter DE (XFCE, MATE)
-4. **VS Code path** — Desktop `.deb` inside DCV (recommended) vs browser `code-server` on :8080
-5. **Keep AL2023 files?** — Keep as reference or remove to reduce clutter
+1. **Desktop environment** — `ubuntu-desktop-minimal` (current) vs individual GNOME packages (`gdm3`, `gnome-session`, `gnome-terminal`) for faster/lighter builds
+2. **VS Code path** — Desktop `.deb` inside DCV (recommended) vs browser `code-server` on :8080
+3. **Keep AL2023 files?** — Keep as reference or remove to reduce clutter
 
 ### Acceptance criteria
 

@@ -43,10 +43,10 @@ If you see `Connected` — the path is open (certificate warnings are normal). I
 
 ## DCV: "Wrong username or password"
 
-- Username must be exactly **`ec2-user`** (lowercase, with hyphen). Not `ssm-user`, not `root`.
-- The password is whatever you set with `sudo passwd ec2-user` **on the instance** via SSM.
+- Username must be exactly **`ubuntu`**. Not `ssm-user`, not `root`.
+- The password is whatever you set with `sudo passwd ubuntu` **on the instance** via SSM.
 - The EC2 SSH key pair has nothing to do with the DCV login.
-- Quick check: `sudo passwd --status ec2-user` — look for `P` (password is set and usable).
+- Quick check: `sudo passwd --status ubuntu` — look for `P` (password is set and usable).
 
 ---
 
@@ -73,8 +73,8 @@ sudo systemctl restart dcvserver
 **3. If `journalctl -u gdm` shows "maximum number of X display failures"** — NVIDIA drivers are missing or broken. Fix:
 
 ```bash
-sudo dnf install -y "kernel-devel-$(uname -r)" "kernel-headers-$(uname -r)" gcc make
-sudo dnf install -y nvidia-release nvidia-driver-cuda
+sudo apt-get -y install linux-headers-$(uname -r) build-essential dkms ubuntu-drivers-common
+sudo ubuntu-drivers install --gpgpu
 sudo reboot
 ```
 

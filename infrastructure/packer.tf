@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Packer golden AMI (AL2023 + GNOME + DCV + PyBullet + NVIDIA on g5-class).
+# Packer golden AMI (Ubuntu 24.04 + GNOME + DCV + PyBullet + NVIDIA on g5-class).
 # null_resource runs `packer build`; post-processors write the AMI id to SSM.
 # EC2 reads SSM Parameter: local.packer_golden_ami_ssm_parameter_name
 # First-time: if `tofu plan` errors on missing parameter, run:
@@ -12,8 +12,8 @@ resource "null_resource" "packer_pybullet_ami" {
   count = local.packer_ami_id_override == null ? 1 : 0
 
   triggers = {
-    pkr_hcl     = filesha256("${path.module}/../packer/pybullet-al2023.pkr.hcl")
-    provisioner = filesha256("${path.module}/../packer/scripts/provision-al2023.sh")
+    pkr_hcl     = filesha256("${path.module}/../packer/pybullet-ubuntu.pkr.hcl")
+    provisioner = filesha256("${path.module}/../packer/scripts/provision-ubuntu.sh")
     publish_ssm = filesha256("${path.module}/../packer/scripts/publish-ami-ssm.sh")
     ssm_param   = local.packer_golden_ami_ssm_parameter_name
   }
@@ -34,21 +34,21 @@ resource "null_resource" "packer_pybullet_ami" {
       ROOT="${abspath("${path.module}/../packer")}"
       cd "$ROOT"
       command -v packer >/dev/null 2>&1 || { echo "Install Packer: https://developer.hashicorp.com/packer/install"; exit 1; }
-      packer init .
+      packer init pybullet-ubuntu.pkr.hcl
       packer validate \
         -var "region=${data.aws_region.current.id}" \
         -var "vpc_id=${data.aws_vpc.this.id}" \
         -var "subnet_id=${local.packer_subnet_id}" \
         -var "project_name=${local.project_name}" \
         -var "aws_cli_profile=${local.aws_cli_profile}" \
-        pybullet-al2023.pkr.hcl
+        pybullet-ubuntu.pkr.hcl
       packer build \
         -var "region=${data.aws_region.current.id}" \
         -var "vpc_id=${data.aws_vpc.this.id}" \
         -var "subnet_id=${local.packer_subnet_id}" \
         -var "project_name=${local.project_name}" \
         -var "aws_cli_profile=${local.aws_cli_profile}" \
-        pybullet-al2023.pkr.hcl
+        pybullet-ubuntu.pkr.hcl
     EOF
   }
 }
