@@ -21,3 +21,8 @@ data "aws_subnets" "public_in_vpc" {
     values = ["*public*"]
   }
 }
+
+# Auto-detect the apply host's public IP for security group ingress.
+data "http" "my_public_ip" {
+  url = "https://checkip.amazonaws.com"
+}

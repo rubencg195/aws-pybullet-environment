@@ -137,7 +137,7 @@ flowchart TB
 | **IDE** | **Not installed** | VS Code / code-server not in the AMI |
 | **IaC** | OpenTofu + Packer | Golden AMI id stored in SSM Parameter Store |
 | **Instance access** | SSM Session Manager | `AmazonSSMManagedInstanceCore` IAM policy |
-| **Security group** | TCP 22, TCP 8443, `create_before_destroy` | No TCP 8080 (code-server) yet |
+| **Security group** | TCP 22, TCP 8443, `create_before_destroy` | Auto-locked to apply host's public IP via `checkip.amazonaws.com` |
 | **DCV user** | `ec2-user` | Must switch to `ubuntu` after OS migration |
 | **EBS root volume** | gp3, 80 GiB, encrypted | Tagged, `delete_on_termination = true` — no orphaned volumes |
 | **AMI cost tracking** | `snapshot_tags` + `run_tags` | Packer builder instance and snapshots tagged for cost allocation |
@@ -264,7 +264,7 @@ session-manager-plugin --version
 Edit `infrastructure/local.tf`:
 - `vpc_name` — must match your VPC `Name` tag
 - `aws_cli_profile` — must match `provider.tf`
-- `allowed_ingress_cidrs` — set to `["YOUR.IP/32"]` for security (empty = `0.0.0.0/0`)
+- `allowed_ingress_cidrs` — override with explicit CIDRs (empty = auto-detect your public IP via `checkip.amazonaws.com`)
 - `ec2_instance_type` — default `g5.xlarge`
 - `packer_ami_id_override` — set to an `ami-…` to skip Packer entirely
 
@@ -318,13 +318,18 @@ Each `packer build` runs a **g5.xlarge** for 30-60+ minutes and stores a new AMI
 
 ### Step 1 — Verify ingress
 
-If `allowed_ingress_cidrs` is restricted, confirm your current public IP is included:
+The security group is automatically locked to the public IP of the machine running `tofu apply` (via `data "http"` → `checkip.amazonaws.com`). If your IP changed (ISP reassignment, VPN, etc.), just re-apply:
+
+```bash
+cd infrastructure
+tofu apply -auto-approve
+```
+
+To verify your current IP matches what's in the SG:
 
 ```bash
 curl -fsS https://checkip.amazonaws.com
 ```
-
-Update `local.tf` and `tofu apply -auto-approve` if your IP changed.
 
 ### Step 2 — Open an SSM session
 
@@ -390,8 +395,8 @@ python -c "import pybullet as p, time as t; p.connect(p.GUI); t.sleep(2); p.disc
 
 ## Security
 
-> [!WARNING]
-> If `allowed_ingress_cidrs` is empty, the security group opens TCP 22 (SSH) and TCP 8443 (DCV) to `0.0.0.0/0`. For anything non-throwaway, restrict to `["YOUR.IP/32"]` or use a VPN/bastion. SSM does not require exposing SSH globally.
+> [!NOTE]
+> By default, the security group is automatically locked to the public IP of the machine running `tofu apply`, using `data "http"` against `https://checkip.amazonaws.com`. If auto-detection fails, uncomment the `0.0.0.0/0` fallback in `local.tf`. You can also set `allowed_ingress_cidrs` to an explicit list to override. SSM does not require exposing SSH globally.
 
 ### Line endings
 
@@ -523,6 +528,7 @@ Everything below is implemented and working:
 | 0.11 | Provision cleanup: DCV temp files removed; end-of-provision summary (kernel, GPU, DCV, PyBullet) | DONE |
 | 0.12 | EC2: root volume tagged + explicit `delete_on_termination`; SG `create_before_destroy` lifecycle | DONE |
 | 0.13 | Cleanup: removed legacy `user_data.sh`, reset `packer_ami_id_override` to null, added output descriptions | DONE |
+| 0.14 | Auto-detect apply host public IP via `data "http"` → `checkip.amazonaws.com`; SG locked to `/32` by default | DONE |
 
 ### Phase 1 — Ubuntu LTS golden AMI (OS migration)
 
