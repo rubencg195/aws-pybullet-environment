@@ -18,14 +18,23 @@ The current working stack. Everything here is deployed and verified.
 | 0.4 | DCV pinned tarball + SHA256 verification | DONE |
 | 0.5 | Golden AMI id published to SSM; OpenTofu reads it automatically | DONE |
 | 0.6 | `packer_ami_id_override` to skip Packer during dev | DONE |
-| 0.7 | Architecture diagrams, deploy runbook, troubleshooting docs | DONE |
-| 0.8 | `.gitattributes` LF enforcement for .tf, .pkr.hcl, .sh | DONE |
-| 0.9 | Packer `snapshot_tags`, `run_tags`, `ssh_timeout` | DONE |
-| 0.10 | Post-reboot sanity checks: `nvidia-smi`, DCV, PyBullet import | DONE |
-| 0.11 | Provision cleanup: DCV temp files removed, end-of-provision summary | DONE |
-| 0.12 | EC2: root volume tagged, `delete_on_termination`, SG `create_before_destroy` | DONE |
-| 0.13 | Removed legacy `user_data.sh`, reset AMI override, output descriptions | DONE |
-| 0.14 | Auto-detect public IP for SG ingress via `checkip.amazonaws.com` | DONE |
+| 0.7 | `.gitattributes` LF enforcement for .tf, .pkr.hcl, .sh | DONE |
+| 0.8 | `.gitignore` for `packer-manifest.json` | DONE |
+| 0.9 | Fix: Packer `execute_command` — provision script now runs with sudo | DONE |
+| 0.10 | Fix: IMDSv2 token-based metadata retrieval (was IMDSv1, silently skipped NVIDIA) | DONE |
+| 0.11 | Fix: DCV auto-session hardening — creates config section if missing | DONE |
+| 0.12 | Fix: kernel-devel/headers unpinned to avoid version mismatch on build | DONE |
+| 0.13 | Fix: SSM parameter path changed from `/aws` (reserved) to `/pybullet` prefix | DONE |
+| 0.14 | Packer `snapshot_tags`, `run_tags` for cost tracking; `ssh_timeout` for robustness | DONE |
+| 0.15 | Post-reboot sanity checks: `nvidia-smi`, DCV, PyBullet import — blocks bad AMIs | DONE |
+| 0.16 | Provision cleanup: DCV temp files removed, end-of-provision summary printed | DONE |
+| 0.17 | EC2: root volume tagged, `delete_on_termination`, SG `create_before_destroy` | DONE |
+| 0.18 | Removed legacy `user_data.sh`, reset AMI override, added output descriptions | DONE |
+| 0.19 | Auto-detect public IP for SG ingress via `checkip.amazonaws.com` | DONE |
+| 0.20 | Golden AMI output marked `sensitive` for SSM provider compatibility | DONE |
+| 0.21 | Docs split: README (quick start) + SETUP.md + TROUBLESHOOTING.md + ROADMAP.md | DONE |
+| 0.22 | Architecture + DevOps flow diagrams in README | DONE |
+| 0.23 | Full destroy + recreate verified end-to-end | DONE |
 
 ---
 
