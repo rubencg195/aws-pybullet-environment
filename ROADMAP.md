@@ -106,7 +106,7 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 **Left:** Recreate EC2 (it is **not** in OpenTofu state; last instance is **terminated** in AWS). Then full apply through Packer (or `packer_ami_id_override`), run the sim test, list the bucket.
 
-**Current blocker (verified):** (1) **`null_resource.packer_pybullet_ami[0]` is tainted** after a failed Packer provisioner. (2) **`provision-ubuntu.sh` hash** in state does not match the working tree, so Packer would re-run anyway. (3) **No `aws_instance` in state** — next apply **adds** a new VM; there is no stopped instance to “start.” Repo fix for the pip error is already merged; next successful Packer run should unblock. Optional: **`packer_ami_id_override`** to skip Packer and only launch EC2 from the current SSM AMI (see README).
+**Current blocker (verified):** (1) **`null_resource.packer_pybullet_ami[0]` is tainted** after a failed Packer provisioner. (2) **`provision-ubuntu.sh` hash** in state does not match the working tree, so Packer would re-run anyway. (3) **No `aws_instance` in state** — next apply **adds** a new VM. (4) **`tofu output pybullet_host_instance_id` can be stale** after the resource leaves state; the last id we checked was **terminated** in EC2 (not `stopped`). Runners now use **`scripts/lib/ec2-host-precheck.sh`** to validate **running** vs **terminated** and to reject **`…-packer-builder`**. Optional: **`packer_ami_id_override`** to skip Packer (see README).
 
 ---
 

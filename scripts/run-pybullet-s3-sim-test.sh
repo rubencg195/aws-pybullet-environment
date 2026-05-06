@@ -29,6 +29,10 @@ echo "Instance: ${INSTANCE_ID}  Bucket: ${BUCKET}  Region: ${REGION}  Profile: $
 AWS=(aws --profile "${PROFILE}")
 export AWS_EC2_METADATA_DISABLED=true
 
+# shellcheck source=lib/ec2-host-precheck.sh
+source "${SCRIPT_DIR}/lib/ec2-host-precheck.sh"
+ec2_host_precheck || exit 1
+
 echo "Waiting for SSM agent (up to ~3 min)..."
 for i in $(seq 1 36); do
   PING="$("${AWS[@]}" ssm describe-instance-information \

@@ -37,7 +37,10 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 | Finding | Detail |
 |--------|--------|
 | **No EC2 in state** | `tofu state list` has no `module.pybullet_host.aws_instance.this`. The next full apply will **create** a new instance. |
-| **Old instance gone** | AWS shows `i-0765e0106e6bd7821` **terminated** (tag `Name=aws-pybullet-environment-pybullet`). Not a “stopped” box you can start again. |
+| **Stale `tofu output`** | Remote state can still expose `pybullet_host_instance_id` / DCV URL from an **old** apply even after the `aws_instance` object was dropped from state. **`./scripts/run-acceptance.sh`** and **`./scripts/run-pybullet-s3-sim-test.sh`** now call **`scripts/lib/ec2-host-precheck.sh`**: they query EC2 and **fail fast** if that id is missing, **terminated**, not **running**, or tagged as `*packer-builder*`. |
+| **Stopped vs terminated** | **Stop** in EC2 → API state **`stopped`** (you can **Start** again). **Terminate** → **`terminated`** (gone forever). We did not confuse the two: `describe-instances` for the id from `tofu output` returned **`terminated`**, not `stopped`. |
+| **Do not confuse Packer builder** | A **running** `g5.xlarge` named **`…-packer-builder`** is the **temporary Packer build VM**, not the DCV PyBullet host (**`…-pybullet`**). If you only see the builder running, the workload host still needs to be created (e.g. `tofu apply`). |
+| **Old workload instance** | `i-0765e0106e6bd7821` (`Name=aws-pybullet-environment-pybullet`) is **terminated** in `us-east-1` (profile `personal`); `StateReason` includes user-initiated shutdown/terminate. You cannot “start” that id; run **`tofu apply`** for a new instance and new outputs. |
 | **Packer `null_resource` tainted** | `null_resource.packer_pybullet_ami[0]` is **tainted** after a failed `local-exec` (e.g. the old `pip install pybullet_data` error). Taint forces replacement on apply. |
 | **Provision script changed** | `provision-ubuntu.sh` SHA in state (`f0b2b26…`) ≠ current file (`ab3a40ef…`), so OpenTofu would replace the `null_resource` anyway to re-run Packer. |
 | **Fix already in repo** | Invalid `pybullet_data` pip line removed; **`boto3`** is installed in the venv. The next Packer build should pass that step. |
@@ -464,6 +467,8 @@ aws-pybullet-environment/
 ├── TROUBLESHOOTING.md               # Common issues and fixes
 ├── ROADMAP.md                       # What's done, what's next, dev guide
 ├── scripts/
+│   ├── lib/
+│   │   └── ec2-host-precheck.sh     # Sourced: EC2 running? not terminated? not packer-builder
 │   ├── run-acceptance.sh            # Workstation: SSM + optional DCV curl (Phase 3 ✓)
 │   ├── run-pybullet-s3-sim-test.sh # Phase 4: SSM Run Command → GIF in S3
 │   ├── pybullet_deep_test/
