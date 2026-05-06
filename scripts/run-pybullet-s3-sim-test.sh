@@ -61,7 +61,8 @@ bucket = os.environ['BUCKET']
 region = os.environ['REGION']
 b64 = os.environ['B64_PY']
 parts = [
-    'set -euo pipefail',
+    # AWS-RunShellScript uses /bin/sh, not bash — no pipefail.
+    'set -eu',
     'export PYBULLET_S3_BUCKET=' + shlex.quote(bucket),
     'export EC2_INSTANCE_ID=' + shlex.quote(iid),
     'export AWS_DEFAULT_REGION=' + shlex.quote(region),

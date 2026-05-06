@@ -91,7 +91,7 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 ---
 
-## Phase 4 — PyBullet headless sim & S3 artifacts (PARTIAL)
+## Phase 4 — PyBullet headless sim & S3 artifacts (DONE)
 
 > **Priority: MEDIUM** — Deeper integration test: record a stock PyBullet scene and upload to S3 from the instance role.
 
@@ -99,14 +99,12 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 |---|------|--------|-------|
 | 4.1 | S3 bucket + EC2 `PutObject` IAM | DONE | `infrastructure/s3_pybullet_sim.tf`; prefix `sim-runs/*`; lifecycle 90d |
 | 4.2 | Run Command runner + on-instance Python | DONE | `scripts/run-pybullet-s3-sim-test.sh`, `scripts/pybullet_deep_test/run_sim_and_upload.py` |
-| 4.3 | Golden AMI includes `boto3` in venv | PARTIAL | `provision-ubuntu.sh` updated; needs **successful Packer build** via full `tofu apply` |
-| 4.4 | End-to-end: GIF object visible in S3 | NOT STARTED | `./scripts/run-pybullet-s3-sim-test.sh` with instance **running**, SSM Online |
+| 4.3 | Golden AMI includes `boto3` in venv | PARTIAL | `provision-ubuntu.sh` has `boto3`; current launch may use older SSM AMI — **`run_sim_and_upload.py`** can `pip install` if missing |
+| 4.4 | End-to-end: GIF object visible in S3 | DONE | `./scripts/run-pybullet-s3-sim-test.sh` → `sim-runs/<instance-id>/…/r2d2_plane_sim.gif` |
 
-**Done (summary):** IaC, scripts, docs, invalid `pybullet_data` pip removed (assets ship with `pybullet`).
+**Done (summary):** IaC, scripts, docs, invalid `pybullet_data` pip removed; EC2 recreated via **`packer_ami_id_override`** (SSM golden AMI); acceptance + **`run-pybullet-s3-sim-test.sh`** verified; GIF in **`sim-runs/`**.
 
-**Left:** Recreate EC2 (it is **not** in OpenTofu state; last instance is **terminated** in AWS). Then full apply through Packer (or `packer_ami_id_override`), run the sim test, list the bucket.
-
-**Current blocker (verified):** (1) **`null_resource.packer_pybullet_ami[0]` is tainted** after a failed Packer provisioner. (2) **`provision-ubuntu.sh` hash** in state does not match the working tree, so Packer would re-run anyway. (3) **No `aws_instance` in state** — next apply **adds** a new VM. (4) **`tofu output pybullet_host_instance_id` can be stale** after the resource leaves state; the last id we checked was **terminated** in EC2 (not `stopped`). Runners now use **`scripts/lib/ec2-host-precheck.sh`** to validate **running** vs **terminated** and to reject **`…-packer-builder`**. Optional: **`packer_ami_id_override`** to skip Packer (see README).
+**Operational note:** `infrastructure/local.tf` may set **`packer_ami_id_override`** to skip Packer while bringing the host back. Set it back to **`null`** when you want OpenTofu to run **`null_resource.packer_pybullet_ami`** again (long build).
 
 ---
 

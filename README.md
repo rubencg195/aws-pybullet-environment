@@ -15,7 +15,7 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 | **0–1** | AL2023 baseline → Ubuntu 24.04 golden AMI | Done |
 | **2** | VS Code on the desktop | Done |
 | **3** | Acceptance testing (`run-acceptance.sh`, on-instance checks) | Done |
-| **4** | **PyBullet headless sim + S3 artifacts** (GIF upload, least-privilege IAM) | **In progress** |
+| **4** | **PyBullet headless sim + S3 artifacts** (GIF upload, least-privilege IAM) | **Done** |
 | **5** | Production hardening (IAM roles, lifecycle, CI/CD, KMS) | Not started (was “Phase 4”) |
 
 ### Phase 4 — what is done
@@ -26,32 +26,24 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 - Packer provision script installs **`boto3`** in `/opt/pybullet-venv` (no fake `pybullet_data` pip package; URDFs come with **`pybullet`**).
 - Documented **targeted** `tofu apply -target=…` for bucket + IAM only when you want to skip a Packer run.
 
-### Phase 4 — what is left
+### Phase 4 — optional follow-ups
 
-- **Recreate the PyBullet host:** `module.pybullet_host.aws_instance.this` is **not** in OpenTofu state, and the last known instance (`i-0765e0106e6bd7821`) is **terminated** in AWS — there is no running VM until you apply (or import a replacement you created by hand).
-- **Packer:** Run a **successful** full `tofu apply -auto-approve` so `null_resource.packer_pybullet_ami` finishes and publishes a new AMI to SSM **or** set `packer_ami_id_override` to a known-good `ami-…` to skip Packer and only create EC2.
-- After the instance exists: wait until SSM shows **Online**, then `./scripts/run-pybullet-s3-sim-test.sh` and confirm a **`.gif`** under `s3://<pybullet_sim_artifacts_bucket>/sim-runs/…`.
+- **`packer_ami_id_override`:** `infrastructure/local.tf` may pin an `ami-…` (from SSM) to **skip Packer** and launch EC2 quickly. Set back to **`null`** when you want OpenTofu to run **`null_resource.packer_pybullet_ami`** again (~30–60+ minutes).
+- **GPU / `nvidia-smi`:** If acceptance warns on **`nvidia-smi`**, rebuild the golden AMI (Packer) or replace the instance so the kernel matches the NVIDIA stack (see **TROUBLESHOOTING.md**).
+- **Runners:** **`scripts/lib/ec2-host-precheck.sh`** starts **stopped** instances, rejects **terminated** ids and **`…-packer-builder`**, and tolerates stale **`tofu output`** with clear errors.
 
-### Current blocker (investigated)
+### Phase 4 — troubleshooting reference
 
-| Finding | Detail |
+| Topic | Detail |
 |--------|--------|
-| **No EC2 in state** | `tofu state list` has no `module.pybullet_host.aws_instance.this`. The next full apply will **create** a new instance. |
-| **Stale `tofu output`** | Remote state can still expose `pybullet_host_instance_id` / DCV URL from an **old** apply even after the `aws_instance` object was dropped from state. **`./scripts/run-acceptance.sh`** and **`./scripts/run-pybullet-s3-sim-test.sh`** call **`scripts/lib/ec2-host-precheck.sh`**: validate the id, reject **terminated** / **`*packer-builder`**, wait out **stopping**, **`start-instances`** if **stopped**, then poll until **running** (override wait with **`EC2_START_WAIT_MAX_SEC`**, default 600). |
-| **Stopped vs terminated** | **Stop** in EC2 → API state **`stopped`** (you can **Start** again). **Terminate** → **`terminated`** (gone forever). We did not confuse the two: `describe-instances` for the id from `tofu output` returned **`terminated`**, not `stopped`. |
-| **Do not confuse Packer builder** | A **running** `g5.xlarge` named **`…-packer-builder`** is the **temporary Packer build VM**, not the DCV PyBullet host (**`…-pybullet`**). If you only see the builder running, the workload host still needs to be created (e.g. `tofu apply`). |
-| **Old workload instance** | `i-0765e0106e6bd7821` (`Name=aws-pybullet-environment-pybullet`) is **terminated** in `us-east-1` (profile `personal`); `StateReason` includes user-initiated shutdown/terminate. You cannot “start” that id; run **`tofu apply`** for a new instance and new outputs. |
-| **Packer `null_resource` tainted** | `null_resource.packer_pybullet_ami[0]` is **tainted** after a failed `local-exec` (e.g. the old `pip install pybullet_data` error). Taint forces replacement on apply. |
-| **Provision script changed** | `provision-ubuntu.sh` SHA in state (`f0b2b26…`) ≠ current file (`ab3a40ef…`), so OpenTofu would replace the `null_resource` anyway to re-run Packer. |
-| **Fix already in repo** | Invalid `pybullet_data` pip line removed; **`boto3`** is installed in the venv. The next Packer build should pass that step. |
-
-**Fast path (skip Packer, only bring EC2 back):** In `infrastructure/local.tf`, set `packer_ami_id_override` to the latest golden AMI (e.g. `aws ssm get-parameter --name "/pybullet/aws-pybullet-environment/golden-ami-id" --query Parameter.Value --output text --profile personal --region us-east-1`). Apply, then unset override on a later run if you want Packer managed again.
-
-**Full path:** `cd infrastructure && tofu apply -auto-approve` and let Packer run to completion (~30–60+ minutes), then verify outputs and SSM.
+| **Stale `tofu output`** | Remote state can still list an old `pybullet_host_instance_id` after the `aws_instance` is gone — precheck calls **`describe-instances`** on the real API. |
+| **Stopped vs terminated** | **Stopped** → can **start**; **terminated** → need a **new** instance (`tofu apply`). |
+| **Packer builder** | **`…-packer-builder`** is not the DCV host (**`…-pybullet`**). |
+| **SSM `sh`** | **`AWS-RunShellScript`** uses **`/bin/sh`** — remote snippets must not use **`set -o pipefail`** (see **`run-pybullet-s3-sim-test.sh`**). |
 
 ```mermaid
 flowchart LR
-  P3["Phase 3\nAcceptance"] --> P4["Phase 4\nSim + S3\nin progress"]
+  P3["Phase 3\nAcceptance"] --> P4["Phase 4\nSim + S3"]
   P4 --> P5["Phase 5\nProd hardening"]
 ```
 
@@ -378,7 +370,7 @@ Hard-fail when `nvidia-smi` is missing on GPU instance types:
 STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh
 ```
 
-**Deep PyBullet + S3 test (Phase 4 — in progress)** — headless `DIRECT` sim, stock plane + R2-D2 URDFs, animated GIF → S3:
+**Deep PyBullet + S3 test (Phase 4)** — headless `DIRECT` sim, stock plane + R2-D2 URDFs, animated GIF → S3:
 
 1. Apply OpenTofu so the artifacts bucket and EC2 `PutObject` policy exist (`infrastructure/s3_pybullet_sim.tf`). If you only added this file and want to **avoid** a Packer rebuild, apply the S3 resources in isolation:
 

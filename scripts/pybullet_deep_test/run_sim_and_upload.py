@@ -86,6 +86,7 @@ def main() -> int:
             yaw=yaw,
             pitch=-18.0,
             roll=0,
+            upAxisIndex=2,
         )
         proj = p.computeProjectionMatrixFOV(
             fov=55,
