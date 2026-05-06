@@ -37,7 +37,7 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 | Finding | Detail |
 |--------|--------|
 | **No EC2 in state** | `tofu state list` has no `module.pybullet_host.aws_instance.this`. The next full apply will **create** a new instance. |
-| **Stale `tofu output`** | Remote state can still expose `pybullet_host_instance_id` / DCV URL from an **old** apply even after the `aws_instance` object was dropped from state. **`./scripts/run-acceptance.sh`** and **`./scripts/run-pybullet-s3-sim-test.sh`** now call **`scripts/lib/ec2-host-precheck.sh`**: they query EC2 and **fail fast** if that id is missing, **terminated**, not **running**, or tagged as `*packer-builder*`. |
+| **Stale `tofu output`** | Remote state can still expose `pybullet_host_instance_id` / DCV URL from an **old** apply even after the `aws_instance` object was dropped from state. **`./scripts/run-acceptance.sh`** and **`./scripts/run-pybullet-s3-sim-test.sh`** call **`scripts/lib/ec2-host-precheck.sh`**: validate the id, reject **terminated** / **`*packer-builder`**, wait out **stopping**, **`start-instances`** if **stopped**, then poll until **running** (override wait with **`EC2_START_WAIT_MAX_SEC`**, default 600). |
 | **Stopped vs terminated** | **Stop** in EC2 → API state **`stopped`** (you can **Start** again). **Terminate** → **`terminated`** (gone forever). We did not confuse the two: `describe-instances` for the id from `tofu output` returned **`terminated`**, not `stopped`. |
 | **Do not confuse Packer builder** | A **running** `g5.xlarge` named **`…-packer-builder`** is the **temporary Packer build VM**, not the DCV PyBullet host (**`…-pybullet`**). If you only see the builder running, the workload host still needs to be created (e.g. `tofu apply`). |
 | **Old workload instance** | `i-0765e0106e6bd7821` (`Name=aws-pybullet-environment-pybullet`) is **terminated** in `us-east-1` (profile `personal`); `StateReason` includes user-initiated shutdown/terminate. You cannot “start” that id; run **`tofu apply`** for a new instance and new outputs. |
@@ -468,7 +468,7 @@ aws-pybullet-environment/
 ├── ROADMAP.md                       # What's done, what's next, dev guide
 ├── scripts/
 │   ├── lib/
-│   │   └── ec2-host-precheck.sh     # Sourced: EC2 running? not terminated? not packer-builder
+│   │   └── ec2-host-precheck.sh     # Sourced: start if stopped, wait running, reject terminated/builder
 │   ├── run-acceptance.sh            # Workstation: SSM + optional DCV curl (Phase 3 ✓)
 │   ├── run-pybullet-s3-sim-test.sh # Phase 4: SSM Run Command → GIF in S3
 │   ├── pybullet_deep_test/

@@ -13,6 +13,7 @@ for arg in "$@"; do
       echo ""
       echo "Environment:"
       echo "  STRICT_ACCEPTANCE_GPU=1  Fail the run if nvidia-smi does not work on g4/g5/g6 (default: warn only)."
+      echo "  EC2_START_WAIT_MAX_SEC   Max seconds to wait after starting a stopped instance (default: 600)."
       exit 0
       ;;
   esac
