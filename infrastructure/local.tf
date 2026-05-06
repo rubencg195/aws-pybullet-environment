@@ -6,7 +6,7 @@ locals {
 
   # If non-null, skip Packer null_resource and SSM lookup; use this AMI for EC2.
   # Set to null again when you want OpenTofu to drive Packer + SSM for new golden AMIs.
-  packer_ami_id_override = "ami-05ba262772913bcff"
+  packer_ami_id_override = "ami-0a51ef8f4128d6661"
 
   # Subnet for Packer build instance (must reach internet). Same logic as ec2-instance module.
   packer_subnet_id = coalesce(
