@@ -43,14 +43,24 @@ def _joint_name(robot, j: int, p) -> str:
     return raw.decode("utf-8", errors="ignore") if isinstance(raw, bytes) else str(raw)
 
 
+def _revolute_like_types(p):
+    """PyBullet 3.2+ exposes JOINT_CONTINUOUS; older wheels are often JOINT_REVOLUTE only."""
+    types = [p.JOINT_REVOLUTE]
+    c = getattr(p, "JOINT_CONTINUOUS", None)
+    if c is not None:
+        types.append(c)
+    return tuple(types)
+
+
 def _classify_joints(robot, p):
     """Split actuated joints into wheel-like vs body/head (for R2-D2 URDF naming variants)."""
     wheel_js: list[int] = []
     body_js: list[int] = []
+    rev_like = _revolute_like_types(p)
     for j in range(p.getNumJoints(robot)):
         inf = p.getJointInfo(robot, j)
         jtype = inf[2]
-        if jtype not in (p.JOINT_REVOLUTE, p.JOINT_CONTINUOUS):
+        if jtype not in rev_like:
             continue
         n = _joint_name(robot, j, p).lower()
         if any(k in n for k in ("wheel", "caster", "castor", "hub", "motor")):
@@ -109,7 +119,8 @@ def main() -> int:
     wheel_js, body_js = _classify_joints(robot, p)
     if not wheel_js:
         # Older/alternate URDFs: drive first few revolute joints so something still moves.
-        wheel_js = [j for j in range(min(4, num_joints)) if p.getJointInfo(robot, j)[2] in (p.JOINT_REVOLUTE, p.JOINT_CONTINUOUS)]
+        rev_like = _revolute_like_types(p)
+        wheel_js = [j for j in range(min(4, num_joints)) if p.getJointInfo(robot, j)[2] in rev_like]
 
     # Let gravity and contacts resolve before recording (fixes "hovering" look from too-few steps).
     for _ in range(settle_steps):
