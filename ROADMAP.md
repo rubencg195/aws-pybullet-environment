@@ -104,9 +104,9 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 **Done (summary):** IaC, scripts, docs, invalid `pybullet_data` pip removed (assets ship with `pybullet`).
 
-**Left:** Full apply through Packer (or `packer_ami_id_override`), optional EC2 replace, then run the sim test and list the bucket.
+**Left:** Recreate EC2 (it is **not** in OpenTofu state; last instance is **terminated** in AWS). Then full apply through Packer (or `packer_ami_id_override`), run the sim test, list the bucket.
 
-**Current blocker:** OpenTofu often shows **pending Packer + EC2 replacement** after `provision-ubuntu.sh` changes; last full apply failed on the old `pybullet_data` pip line — fixed in repo, but reconcile with a completed apply. Targeted `-target=` applies can create bucket/IAM without Packer (see README).
+**Current blocker (verified):** (1) **`null_resource.packer_pybullet_ami[0]` is tainted** after a failed Packer provisioner. (2) **`provision-ubuntu.sh` hash** in state does not match the working tree, so Packer would re-run anyway. (3) **No `aws_instance` in state** — next apply **adds** a new VM; there is no stopped instance to “start.” Repo fix for the pip error is already merged; next successful Packer run should unblock. Optional: **`packer_ami_id_override`** to skip Packer and only launch EC2 from the current SSM AMI (see README).
 
 ---
 

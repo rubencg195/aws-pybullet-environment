@@ -28,14 +28,23 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 
 ### Phase 4 — what is left
 
-- Run a **successful full** `tofu apply -auto-approve` so the golden AMI is rebuilt with the updated `provision-ubuntu.sh` (boto3) **or** confirm the live instance already has boto3 / rely on the script’s runtime `pip install` fallback.
-- Start the PyBullet EC2 instance if it is stopped; wait until SSM shows **Online**.
-- Execute `./scripts/run-pybullet-s3-sim-test.sh` and confirm a **`.gif`** object under `s3://<pybullet_sim_artifacts_bucket>/sim-runs/…`.
+- **Recreate the PyBullet host:** `module.pybullet_host.aws_instance.this` is **not** in OpenTofu state, and the last known instance (`i-0765e0106e6bd7821`) is **terminated** in AWS — there is no running VM until you apply (or import a replacement you created by hand).
+- **Packer:** Run a **successful** full `tofu apply -auto-approve` so `null_resource.packer_pybullet_ami` finishes and publishes a new AMI to SSM **or** set `packer_ami_id_override` to a known-good `ami-…` to skip Packer and only create EC2.
+- After the instance exists: wait until SSM shows **Online**, then `./scripts/run-pybullet-s3-sim-test.sh` and confirm a **`.gif`** under `s3://<pybullet_sim_artifacts_bucket>/sim-runs/…`.
 
-### Current blocker
+### Current blocker (investigated)
 
-- **OpenTofu drift + Packer:** After changing `packer/scripts/provision-ubuntu.sh`, `tofu plan` typically wants to **replace** `null_resource.packer_pybullet_ami` and **replace** the EC2 instance (new AMI). Until that apply **finishes successfully** (30–60+ minutes for Packer), state and the running host may disagree. A previous apply failed on an invalid `pip install pybullet_data`; that is fixed, but a **new Packer run** is still required to fully reconcile.
-- **Workaround:** Use `local.packer_ami_id_override` in `infrastructure/local.tf` to skip Packer temporarily, or apply only the S3/IAM targets (see **Deep PyBullet + S3 test** below) if the bucket is all you need.
+| Finding | Detail |
+|--------|--------|
+| **No EC2 in state** | `tofu state list` has no `module.pybullet_host.aws_instance.this`. The next full apply will **create** a new instance. |
+| **Old instance gone** | AWS shows `i-0765e0106e6bd7821` **terminated** (tag `Name=aws-pybullet-environment-pybullet`). Not a “stopped” box you can start again. |
+| **Packer `null_resource` tainted** | `null_resource.packer_pybullet_ami[0]` is **tainted** after a failed `local-exec` (e.g. the old `pip install pybullet_data` error). Taint forces replacement on apply. |
+| **Provision script changed** | `provision-ubuntu.sh` SHA in state (`f0b2b26…`) ≠ current file (`ab3a40ef…`), so OpenTofu would replace the `null_resource` anyway to re-run Packer. |
+| **Fix already in repo** | Invalid `pybullet_data` pip line removed; **`boto3`** is installed in the venv. The next Packer build should pass that step. |
+
+**Fast path (skip Packer, only bring EC2 back):** In `infrastructure/local.tf`, set `packer_ami_id_override` to the latest golden AMI (e.g. `aws ssm get-parameter --name "/pybullet/aws-pybullet-environment/golden-ami-id" --query Parameter.Value --output text --profile personal --region us-east-1`). Apply, then unset override on a later run if you want Packer managed again.
+
+**Full path:** `cd infrastructure && tofu apply -auto-approve` and let Packer run to completion (~30–60+ minutes), then verify outputs and SSM.
 
 ```mermaid
 flowchart LR
