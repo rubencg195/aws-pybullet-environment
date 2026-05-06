@@ -41,3 +41,6 @@ override.tf.json
 terraform.rc
 .terraform.lock*
 */.terraform.lock*
+
+# PyBullet sim recordings downloaded locally (see scripts/download-pybullet-sim-recording.sh)
+latest-*.gif

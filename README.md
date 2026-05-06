@@ -393,6 +393,16 @@ STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh
 
 The script uses SSM **Run Command** to run `scripts/pybullet_deep_test/run_sim_and_upload.py` on the host. Objects land under `s3://<bucket>/sim-runs/…` by default (`PYBULLET_S3_PREFIX`; IAM allows only `sim-runs/*`). To use another prefix, add `export PYBULLET_S3_PREFIX=…` to the generated command in `scripts/run-pybullet-s3-sim-test.sh` and update `infrastructure/s3_pybullet_sim.tf` accordingly. Run Command output includes the object key.
 
+**List / download recordings (workstation, same AWS profile as `provider.tf`):**
+
+```bash
+./scripts/list-pybullet-sim-recordings.sh              # table: time, size, s3:// URI
+./scripts/list-pybullet-sim-recordings.sh --uris-only  # one URI per line, newest first
+
+./scripts/download-pybullet-sim-recording.sh 's3://bucket/sim-runs/.../r2d2_plane_sim.gif'
+./scripts/download-pybullet-sim-recording.sh 'https://bucket.s3.us-east-1.amazonaws.com/sim-runs/.../file.gif' ./local.gif
+```
+
 ---
 
 ## Clipboard (Windows ↔ DCV)
@@ -463,6 +473,8 @@ aws-pybullet-environment/
 │   │   └── ec2-host-precheck.sh     # Sourced: start if stopped, wait running, reject terminated/builder
 │   ├── run-acceptance.sh            # Workstation: SSM + optional DCV curl (Phase 3 ✓)
 │   ├── run-pybullet-s3-sim-test.sh # Phase 4: SSM Run Command → GIF in S3
+│   ├── list-pybullet-sim-recordings.sh   # List GIFs in sim artifacts bucket
+│   ├── download-pybullet-sim-recording.sh # Download by s3:// or HTTPS S3 URL
 │   ├── pybullet_deep_test/
 │   │   └── run_sim_and_upload.py   # Invoked on EC2; plane + R2-D2, Pillow GIF, boto3
 │   └── acceptance/
