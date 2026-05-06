@@ -37,3 +37,8 @@ output "pybullet_host_private_ip" {
   description = "Private IP of the PyBullet host (for VPC-internal access)"
   value       = module.pybullet_host.private_ip
 }
+
+output "pybullet_sim_artifacts_bucket" {
+  description = "S3 bucket for PyBullet headless sim GIFs (scripts/run-pybullet-s3-sim-test.sh)"
+  value       = aws_s3_bucket.pybullet_sim.id
+}

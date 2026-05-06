@@ -119,6 +119,7 @@ pip install \
   "numpy>=1.22" \
   "scipy" \
   "pybullet" \
+  "boto3" \
   "Pillow" \
   "matplotlib"
 chown -R ubuntu:ubuntu "${VENV}"

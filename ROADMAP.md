@@ -91,19 +91,38 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 ---
 
-## Phase 4 — Production Hardening
+## Phase 4 — PyBullet headless sim & S3 artifacts (PARTIAL)
 
-> **Priority: LOW** — For shared/team use, not blocking individual dev.
+> **Priority: MEDIUM** — Deeper integration test: record a stock PyBullet scene and upload to S3 from the instance role.
 
 | # | Task | Status | Notes |
 |---|------|--------|-------|
-| 4.1 | Dedicated Packer IAM role | NOT STARTED | Least-privilege for EC2 build + SSM PutParameter |
-| 4.2 | AMI / snapshot lifecycle | NOT STARTED | Auto-deregister old AMIs, cost alerts |
-| 4.3 | CI/CD for Packer builds | NOT STARTED | GitHub Actions or CodeBuild |
-| 4.4 | SSM parameter hardening | NOT STARTED | `SecureString` with KMS |
-| 4.5 | Builder vs runtime instance type alignment | DONE | README **Production notes**: match Packer `builder_instance_type` to `ec2_instance_type` (same GPU family) |
-| 4.6 | Root device mapping validation | DONE | README **Production notes**: Ubuntu `/dev/sda1` in Packer vs AL2023 `/dev/xvda`; EC2 module uses AMI root device |
-| 4.7 | Optional container runtime | NOT STARTED | Docker/ECR only if needed |
+| 4.1 | S3 bucket + EC2 `PutObject` IAM | DONE | `infrastructure/s3_pybullet_sim.tf`; prefix `sim-runs/*`; lifecycle 90d |
+| 4.2 | Run Command runner + on-instance Python | DONE | `scripts/run-pybullet-s3-sim-test.sh`, `scripts/pybullet_deep_test/run_sim_and_upload.py` |
+| 4.3 | Golden AMI includes `boto3` in venv | PARTIAL | `provision-ubuntu.sh` updated; needs **successful Packer build** via full `tofu apply` |
+| 4.4 | End-to-end: GIF object visible in S3 | NOT STARTED | `./scripts/run-pybullet-s3-sim-test.sh` with instance **running**, SSM Online |
+
+**Done (summary):** IaC, scripts, docs, invalid `pybullet_data` pip removed (assets ship with `pybullet`).
+
+**Left:** Full apply through Packer (or `packer_ami_id_override`), optional EC2 replace, then run the sim test and list the bucket.
+
+**Current blocker:** OpenTofu often shows **pending Packer + EC2 replacement** after `provision-ubuntu.sh` changes; last full apply failed on the old `pybullet_data` pip line — fixed in repo, but reconcile with a completed apply. Targeted `-target=` applies can create bucket/IAM without Packer (see README).
+
+---
+
+## Phase 5 — Production Hardening
+
+> **Priority: LOW** — For shared/team use, not blocking individual dev. *(Formerly “Phase 4” in earlier docs.)*
+
+| # | Task | Status | Notes |
+|---|------|--------|-------|
+| 5.1 | Dedicated Packer IAM role | NOT STARTED | Least-privilege for EC2 build + SSM PutParameter |
+| 5.2 | AMI / snapshot lifecycle | NOT STARTED | Auto-deregister old AMIs, cost alerts |
+| 5.3 | CI/CD for Packer builds | NOT STARTED | GitHub Actions or CodeBuild |
+| 5.4 | SSM parameter hardening | NOT STARTED | `SecureString` with KMS |
+| 5.5 | Builder vs runtime instance type alignment | DONE | README **Production notes**: match Packer `builder_instance_type` to `ec2_instance_type` (same GPU family) |
+| 5.6 | Root device mapping validation | DONE | README **Production notes**: Ubuntu `/dev/sda1` in Packer vs AL2023 `/dev/xvda`; EC2 module uses AMI root device |
+| 5.7 | Optional container runtime | NOT STARTED | Docker/ECR only if needed |
 
 ---
 
@@ -112,8 +131,9 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 ### Where to start
 
 1. **Deploy** — `cd infrastructure && tofu apply -auto-approve`
-2. **Acceptance tests** — from repo root: `./scripts/run-acceptance.sh` (SSM + optional external DCV curl)
-3. **Manual** — DCV login, `nvidia-smi`, PyBullet, VS Code from GNOME
+2. **Acceptance tests (Phase 3)** — from repo root: `./scripts/run-acceptance.sh` (SSM + optional external DCV curl)
+3. **Deep sim + S3 (Phase 4)** — `./scripts/run-pybullet-s3-sim-test.sh` after bucket/IAM exist and instance is up
+4. **Manual** — DCV login, `nvidia-smi`, PyBullet, VS Code from GNOME
 
 ### Key files
 
@@ -125,6 +145,9 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 - `packer/scripts/provision-al2023.sh` — AL2023 provisioner (legacy reference)
 - `packer/scripts/publish-ami-ssm.sh` — SSM publish script (shared by both templates)
 - `scripts/run-acceptance.sh` — Phase 3 orchestrator (SSM + external DCV smoke)
+- `scripts/run-pybullet-s3-sim-test.sh` — Phase 4: SSM Run Command + GIF upload
+- `scripts/pybullet_deep_test/run_sim_and_upload.py` — Phase 4: headless PyBullet + boto3
+- `infrastructure/s3_pybullet_sim.tf` — Phase 4: S3 + EC2 PutObject policy
 - `scripts/acceptance/on-instance-checks.sh` — on-instance checks (invoked by runner)
 - `infrastructure/modules/ec2-instance/sg.tf` — security group rules
 
@@ -148,3 +171,4 @@ The stack is complete when all of these are true:
 | T6 | OpenTofu provisions from SSM-stored AMI id |
 | T7 | SSM Session Manager works |
 | T8 | Security group allows SSH :22 and DCV :8443 |
+| T9 | (Phase 4) SSM Run Command completes and a `.gif` appears under `sim-runs/` in `pybullet_sim_artifacts_bucket` |
