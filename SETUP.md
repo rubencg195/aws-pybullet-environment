@@ -13,6 +13,8 @@ The AWS CLI profile used for `tofu apply` and `packer build` needs these permiss
 
 For development, `PowerUserAccess` or `AdministratorAccess` covers everything. For production, scope down to the specific EC2 + SSM parameter ARNs.
 
+To **download** sim GIFs from the artifacts bucket on your laptop (`scripts/download-pybullet-sim-recording.sh`), the same profile also needs read access to that bucket (`s3:GetObject` on `sim-runs/*`, `s3:ListBucket` with the appropriate prefix if you use the console or wild listings).
+
 ---
 
 ## Install Packer

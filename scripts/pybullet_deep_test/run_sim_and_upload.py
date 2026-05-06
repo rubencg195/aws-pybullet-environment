@@ -53,21 +53,40 @@ def _revolute_like_types(p):
 
 
 def _classify_joints(robot, p):
-    """Split actuated joints into wheel-like vs body/head (for R2-D2 URDF naming variants)."""
-    wheel_js: list[int] = []
+    """Drive joints: legs/wheels/motors. Body: head/neck/arms only (Bullet R2-D2 often names legs without 'wheel')."""
+    drive_js: list[int] = []
     body_js: list[int] = []
     rev_like = _revolute_like_types(p)
+    head_kw = ("head", "neck", "eye", "antenna", "periscope", "sensor")
+    arm_kw = ("gripper", "finger", "hand", "arm", "wrist", "elbow", "shoulder", "tool")
+    drive_kw = (
+        "wheel",
+        "caster",
+        "castor",
+        "hub",
+        "motor",
+        "leg",
+        "foot",
+        "ankle",
+        "roller",
+        "drive",
+        "base",
+        "bogie",
+    )
     for j in range(p.getNumJoints(robot)):
         inf = p.getJointInfo(robot, j)
         jtype = inf[2]
         if jtype not in rev_like:
             continue
         n = _joint_name(robot, j, p).lower()
-        if any(k in n for k in ("wheel", "caster", "castor", "hub", "motor")):
-            wheel_js.append(j)
-        else:
+        if any(k in n for k in head_kw) or any(k in n for k in arm_kw):
             body_js.append(j)
-    return wheel_js, body_js
+        elif any(k in n for k in drive_kw):
+            drive_js.append(j)
+        else:
+            # Unlabeled R2-D2 joints are usually leg/foot mechanics — drive those, not the dome.
+            drive_js.append(j)
+    return drive_js, body_js
 
 
 def main() -> int:
@@ -118,9 +137,10 @@ def main() -> int:
 
     wheel_js, body_js = _classify_joints(robot, p)
     if not wheel_js:
-        # Older/alternate URDFs: drive first few revolute joints so something still moves.
+        # Fallback: actuate lowest-index revolute joints (often legs before head in URDF order).
         rev_like = _revolute_like_types(p)
-        wheel_js = [j for j in range(min(4, num_joints)) if p.getJointInfo(robot, j)[2] in rev_like]
+        cand = [j for j in range(num_joints) if p.getJointInfo(robot, j)[2] in rev_like]
+        wheel_js = [j for j in cand if j not in body_js][:6] or cand[:4]
 
     # Let gravity and contacts resolve before recording (fixes "hovering" look from too-few steps).
     for _ in range(settle_steps):
@@ -155,26 +175,43 @@ def main() -> int:
                 j,
                 p.VELOCITY_CONTROL,
                 targetVelocity=float(target),
-                force=85.0,
+                force=120.0,
             )
         for j in body_js:
+            # Keep head motion subtle so leg/base motion reads as the main action.
             p.setJointMotorControl2(
                 robot,
                 j,
                 p.VELOCITY_CONTROL,
-                targetVelocity=float(2.8 * np.sin(t / 9.0 + j * 0.7)),
-                force=12.0,
+                targetVelocity=float(0.9 * np.sin(t / 14.0 + j * 0.5)),
+                force=6.0,
             )
+
+        # Whole-body nudge: R2-D2 URDF often hides wheel motion; forces/torques make translation/yaw obvious.
+        world = getattr(p, "WORLD_FRAME", 2)
+        fx = 260.0 * np.sin(t / 48.0) + 160.0 * np.sin(t / 110.0)
+        fy = 190.0 * np.cos(t / 42.0)
+        tz = 110.0 * np.sin(t / 36.0)
+        p.applyExternalForce(
+            robot,
+            -1,
+            forceObj=[float(fx), float(fy), 0.0],
+            posObj=[0, 0, 0],
+            flags=world,
+        )
+        p.applyExternalTorque(robot, -1, torqueObj=[0, 0, float(tz)], flags=world)
 
         p.stepSimulation()
 
         if t % capture_every != 0:
             continue
 
-        yaw = 42.0 + (t * 0.22)
+        pos, _orn = p.getBasePositionAndOrientation(robot)
+        tx, ty = float(pos[0]), float(pos[1])
+        yaw = 42.0 + (t * 0.18)
         view = p.computeViewMatrixFromYawPitchRoll(
-            cameraTargetPosition=[0.0, 0.0, 0.22],
-            distance=2.45,
+            cameraTargetPosition=[tx, ty, 0.22],
+            distance=2.55,
             yaw=yaw,
             pitch=-24.0,
             roll=0,

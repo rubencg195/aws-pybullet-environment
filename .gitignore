@@ -42,5 +42,6 @@ terraform.rc
 .terraform.lock*
 */.terraform.lock*
 
-# PyBullet sim recordings downloaded locally (see scripts/download-pybullet-sim-recording.sh)
-latest-*.gif
+# PyBullet sim recordings: ignore ad-hoc downloads; keep one sample for the README gallery.
+recordings/*.gif
+!recordings/r2d2_plane_sim.gif

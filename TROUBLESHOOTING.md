@@ -141,3 +141,35 @@ Make sure your credentials are working:
 ```bash
 aws sts get-caller-identity --profile personal
 ```
+
+---
+
+## PyBullet recording: motion looks like “head only”
+
+The GIF is whatever `run-pybullet-s3-sim-test.sh` pushed to S3 in that run. Older builds drove unnamed joints as “body” and the dome dominated. Update the repo, rerun `./scripts/run-pybullet-s3-sim-test.sh`, and download again with `./scripts/download-pybullet-sim-recording.sh "$(./scripts/list-pybullet-sim-recordings.sh --uris-only | head -1)"`. If you hand-edit the Python on the instance, SSM will not pick that up until you change the workstation copy and rerun the runner.
+
+---
+
+## Download script wrote nowhere useful / file not under `recordings/`
+
+By default, `download-pybullet-sim-recording.sh` creates **`recordings/<basename>`** next to the repo root. A bare second argument such as `my.gif` also goes under `recordings/`. Only a path with `/` (relative to repo root) or an absolute path overrides that. For the newest upload: `./scripts/list-pybullet-sim-recordings.sh --uris-only | head -1`.
+
+If you still have old **`latest-*.gif`** files at the repository root from earlier iterations, you can delete them; current tooling expects ad-hoc pulls under **`recordings/`** (the sample **`recordings/r2d2_plane_sim.gif`** is meant to stay for the README).
+
+---
+
+## OpenTofu: `Invalid index` / `null_resource.packer_pybullet_ami[0]` not found
+
+`packer_ami_id_override` is set in `infrastructure/local.tf`, so the Packer `null_resource` has **count 0** and the `[0]` index does not exist. Either set **`packer_ami_id_override = null`** and use the README first-time `-target=…[0]` flow, or drop the `-target` and apply with the pinned AMI only.
+
+---
+
+## Cleared `packer_ami_id_override` and the next apply wants a full Packer build
+
+That is normal: with **`null`**, OpenTofu wires the EC2 AMI to SSM, and the `null_resource` runs Packer when triggers change. Budget 30–60+ minutes. If a golden AMI is already in SSM and you only need a fresh instance from it, you can `tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'` **after** the parameter exists — but changing provisioner files still triggers a rebuild when override is null.
+
+---
+
+## Workstation: `aws s3 cp` denied on sim GIFs
+
+The instance role can **PutObject** on `sim-runs/*`; your laptop profile needs **`s3:GetObject`** (and `ListBucket` on the prefix) on the `pyb-sim-*` bucket to run `download-pybullet-sim-recording.sh`. PowerUser/Administrator covers it; tighter policies should allow read on that bucket or prefix.

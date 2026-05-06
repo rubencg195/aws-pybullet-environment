@@ -5,8 +5,10 @@ locals {
   packer_golden_ami_ssm_parameter_name = "/pybullet/${local.project_name}/golden-ami-id"
 
   # If non-null, skip Packer null_resource and SSM lookup; use this AMI for EC2.
-  # Set to null again when you want OpenTofu to drive Packer + SSM for new golden AMIs.
-  packer_ami_id_override = "ami-0a51ef8f4128d6661"
+  # Set to null when you want OpenTofu to run Packer and read the golden AMI from SSM again.
+  # Previously used to skip long builds during testing:
+  # packer_ami_id_override = "ami-0a51ef8f4128d6661"
+  packer_ami_id_override = null
 
   # Subnet for Packer build instance (must reach internet). Same logic as ec2-instance module.
   packer_subnet_id = coalesce(

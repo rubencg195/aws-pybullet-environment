@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Download a PyBullet sim recording from S3 (or HTTPS S3 virtual-hosted URL).
+# Default destination: recordings/<filename> under the repo root (directory is created).
 # Usage:
 #   ./scripts/download-pybullet-sim-recording.sh s3://bucket/key [out_path]
 #   ./scripts/download-pybullet-sim-recording.sh https://bucket.s3.us-east-1.amazonaws.com/key [out_path]
 #   ./scripts/download-pybullet-sim-recording.sh sim-runs/i-xxx/.../file.gif [out_path]  # uses tofu bucket
+# If out_path is a bare name (e.g. my.gif), it is written to recordings/my.gif.
+# Relative paths with / are resolved from the repo root; absolute paths are used as-is.
 # Env: AWS_PROFILE (default personal)
 set -euo pipefail
 
@@ -14,7 +17,7 @@ PROFILE="${AWS_PROFILE:-personal}"
 
 if [[ $# -lt 1 ]] || [[ "$1" == "-h" ]] || [[ "$1" == "--help" ]]; then
   echo "Usage: $0 <s3_uri|https_s3_url|key_under_bucket> [destination_file]"
-  echo "  destination_file defaults to ./<basename> in the current working directory."
+  echo "  Default: recordings/<basename> under the repository root."
   exit 1
 fi
 
@@ -56,17 +59,26 @@ sys.exit(1)
 " "${RAW}" "${BUCKET}"
 )"
 
+mkdir -p "${REPO_ROOT}/recordings"
+
 if [[ -z "${OUT}" ]]; then
   if [[ "${S3_URI}" =~ ^s3://[^/]+/(.+)$ ]]; then
-    OUT="$(basename "${BASH_REMATCH[1]}")"
+    OUT="${REPO_ROOT}/recordings/$(basename "${BASH_REMATCH[1]}")"
   else
-    OUT="recording.gif"
+    OUT="${REPO_ROOT}/recordings/recording.gif"
   fi
+elif [[ "${OUT}" == /* ]]; then
+  :
+elif [[ "${OUT}" == */* ]]; then
+  OUT="${REPO_ROOT}/${OUT#./}"
+else
+  OUT="${REPO_ROOT}/recordings/${OUT}"
 fi
 
 cd "${REPO_ROOT}"
 echo "Source: ${S3_URI}"
-echo "Dest:   ${REPO_ROOT}/${OUT}  (region ${REGION}, profile ${PROFILE})"
+echo "Dest:   ${OUT}  (region ${REGION}, profile ${PROFILE})"
 
+mkdir -p "$(dirname "${OUT}")"
 aws --profile "${PROFILE}" s3 cp "${S3_URI}" "${OUT}" --region "${REGION}"
 echo "OK: wrote ${OUT}"

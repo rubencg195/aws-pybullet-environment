@@ -101,10 +101,13 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 | 4.2 | Run Command runner + on-instance Python | DONE | `scripts/run-pybullet-s3-sim-test.sh`, `scripts/pybullet_deep_test/run_sim_and_upload.py` |
 | 4.3 | Golden AMI includes `boto3` in venv | PARTIAL | `provision-ubuntu.sh` has `boto3`; current launch may use older SSM AMI — **`run_sim_and_upload.py`** can `pip install` if missing |
 | 4.4 | End-to-end: GIF object visible in S3 | DONE | `./scripts/run-pybullet-s3-sim-test.sh` → `sim-runs/<instance-id>/…/r2d2_plane_sim.gif` |
+| 4.5 | Sim motion: drive vs body joints, base force/torque, camera follows base | DONE | `run_sim_and_upload.py` — clearer translation/yaw in GIF when wheel naming is vague |
+| 4.6 | Local recordings layout + download script | DONE | Default path `recordings/`; `.gitignore` ignores `*.gif` except `r2d2_plane_sim.gif` for README |
+| 4.7 | README gallery + docs sync | DONE | Sample GIF linked at top of README; scripts list/download documented |
 
-**Done (summary):** IaC, scripts, docs, invalid `pybullet_data` pip removed; EC2 recreated via **`packer_ami_id_override`** (SSM golden AMI); acceptance + **`run-pybullet-s3-sim-test.sh`** verified; GIF in **`sim-runs/`**.
+**Done (summary):** S3 + IAM, SSM runner, headless PyBullet + boto3, invalid `pybullet_data` pip removed; sim tuning so the droid’s base motion reads on camera; workstation helpers list and fetch objects into `recordings/`.
 
-**Operational note:** `infrastructure/local.tf` may set **`packer_ami_id_override`** to skip Packer while bringing the host back. Set it back to **`null`** when you want OpenTofu to run **`null_resource.packer_pybullet_ami`** again (long build).
+**Operational note:** `packer_ami_id_override` defaults to **`null`** so `tofu apply` can run Packer and read the AMI from SSM. Pin an `ami-…` only for a quick boot from a known image; see **TROUBLESHOOTING.md** if `-target=null_resource.packer_pybullet_ami[0]` fails while an override is set.
 
 ---
 

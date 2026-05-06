@@ -4,6 +4,12 @@ A GPU-powered cloud workstation for robotics and ML simulation. Uses **Packer** 
 
 **OS:** Ubuntu 24.04 LTS | See [ROADMAP.md](ROADMAP.md) for the full changelog
 
+## Recordings gallery
+
+Headless PyBullet run from the GPU host: checkerboard plane, stock R2-D2 URDF, TinyRenderer capture, then upload to S3. The clip below is the checked-in sample under `recordings/`; your own pulls from `download-pybullet-sim-recording.sh` land in the same folder by default.
+
+![Headless R2-D2 plane simulation (GIF)](recordings/r2d2_plane_sim.gif)
+
 ---
 
 ## Roadmap & status
@@ -22,13 +28,14 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 
 - OpenTofu: S3 artifacts bucket (`pyb-sim-*`), encryption, public access block, lifecycle on `sim-runs/`, EC2 inline policy for `s3:PutObject` on `sim-runs/*` (`infrastructure/s3_pybullet_sim.tf`).
 - Workstation runner: `scripts/run-pybullet-s3-sim-test.sh` (SSM Run Command, base64-safe payload).
-- On-instance script: `scripts/pybullet_deep_test/run_sim_and_upload.py` (headless `DIRECT`, plane + R2-D2, TinyRenderer GIF, boto3 upload).
-- Packer provision script installs **`boto3`** in `/opt/pybullet-venv` (no fake `pybullet_data` pip package; URDFs come with **`pybullet`**).
+- On-instance script: `scripts/pybullet_deep_test/run_sim_and_upload.py` (headless `DIRECT`, plane + R2-D2, TinyRenderer GIF, boto3 upload). Joint targets split so drive joints (legs, wheels, unnamed revolutes) carry most of the motion; head joints are quieter. Base `applyExternalForce` / `applyExternalTorque` plus a camera that tracks the base keeps translation and yaw readable in the GIF when URDF naming is ambiguous.
+- Packer provision script installs **`boto3`** in `/opt/pybullet-venv` (no fake `pybullet_data` pip package; URDFs ship with **`pybullet`**).
+- Local pulls: `scripts/download-pybullet-sim-recording.sh` writes to **`recordings/<filename>`** by default; `.gitignore` drops stray GIFs but keeps **`recordings/r2d2_plane_sim.gif`** for the README gallery.
 - Documented **targeted** `tofu apply -target=…` for bucket + IAM only when you want to skip a Packer run.
 
 ### Phase 4 — optional follow-ups
 
-- **`packer_ami_id_override`:** `infrastructure/local.tf` may pin an `ami-…` (from SSM) to **skip Packer** and launch EC2 quickly. Set back to **`null`** when you want OpenTofu to run **`null_resource.packer_pybullet_ami`** again (~30–60+ minutes).
+- **`packer_ami_id_override`:** In `infrastructure/local.tf`, set an `ami-…` if you need to skip Packer and boot straight from a known image. The repo defaults to **`null`** so the next `tofu apply` can run Packer and refresh SSM. Expect roughly 30–60+ minutes when Packer runs.
 - **GPU / `nvidia-smi`:** If acceptance warns on **`nvidia-smi`**, rebuild the golden AMI (Packer) or replace the instance so the kernel matches the NVIDIA stack (see **TROUBLESHOOTING.md**).
 - **Runners:** **`scripts/lib/ec2-host-precheck.sh`** starts **stopped** instances, rejects **terminated** ids and **`…-packer-builder`**, and tolerates stale **`tofu output`** with clear errors.
 
@@ -261,11 +268,11 @@ Edit `infrastructure/local.tf`:
 | `aws_cli_profile` | Must match `provider.tf` (default: `personal`) |
 | `ec2_instance_type` | GPU instance type (default: `g5.xlarge`) |
 | `allowed_ingress_cidrs` | Leave empty to auto-detect your IP, or set explicit CIDRs |
-| `packer_ami_id_override` | Set to an `ami-…` to skip Packer entirely |
+| `packer_ami_id_override` | Default **`null`** (Packer + SSM golden AMI). Set to a specific `ami-…` only when you intentionally skip Packer |
 
 ### 2. Deploy
 
-**First time** (the SSM parameter doesn't exist yet, so Packer needs to run first):
+**First time** (no SSM parameter yet — Packer must run). Use this when `packer_ami_id_override` is **`null`** in `local.tf`:
 
 ```bash
 cd infrastructure
@@ -400,7 +407,8 @@ The script uses SSM **Run Command** to run `scripts/pybullet_deep_test/run_sim_a
 ./scripts/list-pybullet-sim-recordings.sh --uris-only  # one URI per line, newest first
 
 ./scripts/download-pybullet-sim-recording.sh 's3://bucket/sim-runs/.../r2d2_plane_sim.gif'
-./scripts/download-pybullet-sim-recording.sh 'https://bucket.s3.us-east-1.amazonaws.com/sim-runs/.../file.gif' ./local.gif
+# Default path: recordings/<basename> under the repo root (see script help for overrides)
+./scripts/download-pybullet-sim-recording.sh 'https://bucket.s3.us-east-1.amazonaws.com/sim-runs/.../file.gif' my-run.gif
 ```
 
 ---
@@ -465,6 +473,7 @@ Or when the SSM parameter name changes.
 ```
 aws-pybullet-environment/
 ├── README.md                        # You're here
+├── recordings/                      # Local GIFs; sample checked in for gallery; other *.gif ignored
 ├── SETUP.md                         # Tool installation and IAM setup
 ├── TROUBLESHOOTING.md               # Common issues and fixes
 ├── ROADMAP.md                       # What's done, what's next, dev guide
@@ -474,7 +483,7 @@ aws-pybullet-environment/
 │   ├── run-acceptance.sh            # Workstation: SSM + optional DCV curl (Phase 3 ✓)
 │   ├── run-pybullet-s3-sim-test.sh # Phase 4: SSM Run Command → GIF in S3
 │   ├── list-pybullet-sim-recordings.sh   # List GIFs in sim artifacts bucket
-│   ├── download-pybullet-sim-recording.sh # Download by s3:// or HTTPS S3 URL
+│   ├── download-pybullet-sim-recording.sh # Download → recordings/ by default
 │   ├── pybullet_deep_test/
 │   │   └── run_sim_and_upload.py   # Invoked on EC2; plane + R2-D2, Pillow GIF, boto3
 │   └── acceptance/
