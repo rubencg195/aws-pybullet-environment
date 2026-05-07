@@ -22,13 +22,11 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 | **2** | VS Code on the desktop | Done |
 | **3** | Acceptance testing (`run-acceptance.sh`, on-instance checks) | Done |
 | **4** | **PyBullet headless sim + S3 artifacts** (GIF upload, least-privilege IAM) | **Done** |
-| **5** | Production hardening (IAM roles, lifecycle, CI/CD, KMS) | Not started (was “Phase 4”) |
+| **5** | Production hardening (IAM roles, lifecycle, CI/CD, KMS) | PENDING |
 
 ### Phase 4 — what is done
 
 The sim bucket is **`pyb-sim-<region>-<account-id>`** (see `local.pybullet_sim_bucket_name` in `infrastructure/local.tf`). That replaced the older random-suffix name so you can spot the bucket in the console without guessing. IAM still allows the instance role to write only under **`sim-runs/*`**.
-
-We also went through a messy recovery after a bad `tofu apply`: state drift, deleted instances, bucket rename. That’s sorted now—`tofu plan` is clean, acceptance and the S3 sim test both pass, and downloads land in **`recordings/`** as documented.
 
 - OpenTofu: S3 artifacts bucket **`pyb-sim-<region>-<account-id>`**, encryption, public access block, lifecycle on `sim-runs/`, EC2 inline policy for `s3:PutObject` on `sim-runs/*` (`infrastructure/s3_pybullet_sim.tf`).
 - Workstation runner: `scripts/run-pybullet-s3-sim-test.sh` (SSM Run Command, base64-safe payload).
