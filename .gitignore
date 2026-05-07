@@ -13,6 +13,9 @@ env/
 dist/
 build/
 
+# Local tool installs (e.g. OpenTofu/Packer unpacked in-repo)
+.bin/
+
 # OS / editor
 .DS_Store
 Thumbs.db

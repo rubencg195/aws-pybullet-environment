@@ -179,4 +179,30 @@ The instance role can **PutObject** on `sim-runs/*`; your laptop profile needs *
 
 ## OpenTofu state looks inconsistent after interrupted apply
 
-If `tofu state list` is missing `module.pybullet_host.aws_instance.this` but `tofu output -raw pybullet_host_instance_id` still prints an id, treat outputs as stale and recover state first. Recommended order: check real EC2 resources with AWS CLI, then import or recreate the host so state matches reality, then run the bucket rename/apply steps.
+If `tofu state list` is missing `module.pybullet_host.aws_instance.this` but `tofu output -raw pybullet_host_instance_id` still prints an id, don’t trust that id—it may be a ghost.
+
+What usually works: confirm what actually exists with `aws ec2 describe-instances`, then run a full `tofu apply -auto-approve` so OpenTofu recreates the instance from the module. If you’re also renaming the S3 bucket, expect Terraform to **destroy** the old bucket resource; AWS will refuse if the bucket still has objects (`BucketNotEmpty`). Empty it first, e.g. `aws s3 rm s3://OLD_BUCKET/ --recursive`, then apply again.
+
+If Packer’s `null_resource` exits with **Install Packer** or **`packer` not found**, the OpenTofu `local-exec` runs in your normal shell—install Packer and put it on **`PATH`**, same as for a manual `packer build`.
+
+Rare: Packer prints progress, creates an AMI, then the parent `tofu`/`packer` process sits there doing nothing. The AMI may already be **available** in EC2 while the CLI is stuck. Check the AWS console (or `aws ec2 describe-images --owners self`), then put that AMI id into SSM with `aws ssm put-parameter --overwrite` on `/pybullet/aws-pybullet-environment/golden-ami-id`, `tofu untaint null_resource.packer_pybullet_ami[0]` if it was tainted, and continue with apply—only if you’re sure the build actually finished.
+
+---
+
+## `./scripts/…`: Permission denied
+
+The repo expects workstation scripts to be executable. Some filesystems or archive steps strip the bit. Fix once:
+
+```bash
+chmod +x scripts/run-acceptance.sh scripts/run-pybullet-s3-sim-test.sh \
+  scripts/stop-pybullet-host.sh scripts/list-pybullet-sim-recordings.sh \
+  scripts/download-pybullet-sim-recording.sh scripts/acceptance/on-instance-checks.sh
+```
+
+Or run with `bash scripts/foo.sh`—same behavior.
+
+---
+
+## S3: `BucketNotEmpty` when OpenTofu replaces the sim bucket
+
+Renaming the bucket in code forces replace: destroy old, create new. AWS won’t delete a bucket that still has keys. Empty the old bucket (`aws s3 rm s3://BUCKET/ --recursive`), then re-run `tofu apply -auto-approve`. The config sets **`force_destroy`** on the new bucket so future teardowns are less painful, but the object delete step is still on you during migration.

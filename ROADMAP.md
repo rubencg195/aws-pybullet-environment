@@ -104,21 +104,26 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 | 4.5 | Sim motion: drive vs body joints, base force/torque, camera follows base | DONE | `run_sim_and_upload.py` — clearer translation/yaw in GIF when wheel naming is vague |
 | 4.6 | Local recordings layout + download script | DONE | Default path `recordings/`; `.gitignore` ignores `*.gif` except `r2d2_plane_sim.gif` for README |
 | 4.7 | README gallery + docs sync | DONE | Sample GIF linked at top of README; scripts list/download documented |
+| 4.8 | Deterministic sim bucket name | DONE | `pyb-sim-<region>-<account-id>`; migration + empty-old-bucket note in TROUBLESHOOTING |
+| 4.9 | Stop-host helper script | DONE | `scripts/stop-pybullet-host.sh` |
 
 **Done (summary):** S3 + IAM, SSM runner, headless PyBullet + boto3, invalid `pybullet_data` pip removed; sim tuning so the droid’s base motion reads on camera; workstation helpers list and fetch objects into `recordings/`.
 
 **Operational note:** `packer_ami_id_override` defaults to **`null`** so `tofu apply` can run Packer and read the AMI from SSM. Pin an `ami-…` only for a quick boot from a known image; see **TROUBLESHOOTING.md** if `-target=null_resource.packer_pybullet_ami[0]` fails while an override is set.
 
+### What we fixed in May 2026 (recovery)
+
+Earlier notes called out drift after an interrupted apply: EC2 gone from state but outputs still pointed at old ids, plus a bucket rename that never got a clean end-to-end run. That work is finished.
+
+| Item | Outcome |
+|------|---------|
+| State vs reality | Full apply recreated the host; `tofu plan` is clean. |
+| Bucket name | Live bucket is **`pyb-sim-<region>-<account-id>`**; IAM policy matches. Old bucket objects were removed before replace when AWS returned `BucketNotEmpty`. |
+| Validation | `./scripts/run-acceptance.sh` and `./scripts/run-pybullet-s3-sim-test.sh` + download were run successfully against the new bucket. |
+| Cost / ops | Added **`scripts/stop-pybullet-host.sh`** (`--wait` optional) so you don’t have to remember raw `aws ec2 stop-instances` flags. |
+| Repo hygiene | Workstation `*.sh` entrypoints are executable in the tree; if your OS strips modes, see **TROUBLESHOOTING.md**. |
+
 ---
-
-
-### Current blockers (May 2026)
-
-| Blocker | Status | Notes |
-|---|---|---|
-| Interrupted `tofu apply` left partial state drift | OPEN | `module.pybullet_host` instance resource is missing from current state while outputs still reference an old instance id |
-| Bucket rename validation not completed end-to-end | OPEN | Code is updated to `pyb-sim-<region>-<account-id>`, but sim rerun + download verification is pending after state recovery |
-| One-step full apply can trigger unnecessary long paths during recovery | OPEN | Use targeted recovery/apply order to avoid accidental long Packer paths while reconciling EC2 and S3 state |
 
 ## Phase 5 — Production Hardening
 
@@ -155,6 +160,7 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 - `packer/scripts/provision-al2023.sh` — AL2023 provisioner (legacy reference)
 - `packer/scripts/publish-ami-ssm.sh` — SSM publish script (shared by both templates)
 - `scripts/run-acceptance.sh` — Phase 3 orchestrator (SSM + external DCV smoke)
+- `scripts/stop-pybullet-host.sh` — stop the PyBullet EC2 host from tofu outputs (optional `--wait`)
 - `scripts/run-pybullet-s3-sim-test.sh` — Phase 4: SSM Run Command + GIF upload
 - `scripts/pybullet_deep_test/run_sim_and_upload.py` — Phase 4: headless PyBullet + boto3
 - `infrastructure/s3_pybullet_sim.tf` — Phase 4: S3 + EC2 PutObject policy

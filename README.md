@@ -1,4 +1,4 @@
-# aws-pybullet-environment
+# Remote GPU workstation for PyBullet simulation on AWS
 
 A GPU-powered cloud workstation for robotics and ML simulation. Uses **Packer** to build a golden AMI with everything pre-installed (NVIDIA drivers, GNOME desktop, **Visual Studio Code**, NICE DCV remote access, PyBullet), and **OpenTofu** to deploy it on AWS EC2. You connect from a browser or the DCV native app — no local GPU needed.
 
@@ -26,15 +26,11 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 
 ### Phase 4 — what is done
 
+The sim bucket is **`pyb-sim-<region>-<account-id>`** (see `local.pybullet_sim_bucket_name` in `infrastructure/local.tf`). That replaced the older random-suffix name so you can spot the bucket in the console without guessing. IAM still allows the instance role to write only under **`sim-runs/*`**.
 
-### Current status and blockers
+We also went through a messy recovery after a bad `tofu apply`: state drift, deleted instances, bucket rename. That’s sorted now—`tofu plan` is clean, acceptance and the S3 sim test both pass, and downloads land in **`recordings/`** as documented.
 
-- **In progress:** Bucket naming has been changed in code from random-suffix (`bucket_prefix`) to deterministic `pyb-sim-<region>-<account-id>` (`local.pybullet_sim_bucket_name` + `aws_s3_bucket.pybullet_sim.bucket`).
-- **Blocker:** An earlier `tofu apply` was interrupted mid-run; the remote state currently has partial drift (the EC2 instance resource is missing from state while stale outputs still show an old instance id).
-- **Impact:** Normal full `tofu apply` can try to do too much at once (including Packer paths) while state is being recovered, which slowed bucket migration validation.
-- **Next recovery step:** Run a targeted infra recovery in this order: (1) reconcile EC2 state (import or recreate cleanly), (2) apply S3/IAM rename, (3) rerun `run-pybullet-s3-sim-test.sh`, (4) verify newest object lands in `pyb-sim-<region>-<account-id>` and download to `recordings/`.
-
-- OpenTofu: S3 artifacts bucket named **`pyb-sim-<region>-<account-id>`** (see `local.pybullet_sim_bucket_name`), encryption, public access block, lifecycle on `sim-runs/`, EC2 inline policy for `s3:PutObject` on `sim-runs/*` (`infrastructure/s3_pybullet_sim.tf`).
+- OpenTofu: S3 artifacts bucket **`pyb-sim-<region>-<account-id>`**, encryption, public access block, lifecycle on `sim-runs/`, EC2 inline policy for `s3:PutObject` on `sim-runs/*` (`infrastructure/s3_pybullet_sim.tf`).
 - Workstation runner: `scripts/run-pybullet-s3-sim-test.sh` (SSM Run Command, base64-safe payload).
 - On-instance script: `scripts/pybullet_deep_test/run_sim_and_upload.py` (headless `DIRECT`, plane + R2-D2, TinyRenderer GIF, boto3 upload). Joint targets split so drive joints (legs, wheels, unnamed revolutes) carry most of the motion; head joints are quieter. Base `applyExternalForce` / `applyExternalTorque` plus a camera that tracks the base keeps translation and yaw readable in the GIF when URDF naming is ambiguous.
 - Packer provision script installs **`boto3`** in `/opt/pybullet-venv` (no fake `pybullet_data` pip package; URDFs ship with **`pybullet`**).
@@ -139,7 +135,7 @@ flowchart TB
   subgraph iac["Infrastructure as Code"]
     OT["OpenTofu"]
     NR["null_resource → packer build"]
-    SSM["SSM Parameter Store\n/pybullet/project/golden-ami-id"]
+    SSM["SSM Parameter Store\n/pybullet/aws-pybullet-environment/golden-ami-id"]
     MOD["module ec2-instance"]
   end
 
@@ -254,7 +250,7 @@ You need these installed on the machine where you'll run `tofu apply`:
 
 - **AWS CLI v2** with a configured profile (default: `personal`)
 - **OpenTofu** (`tofu` CLI)
-- **Packer** — see [SETUP.md](SETUP.md) for install instructions
+- **Packer** — see [SETUP.md](SETUP.md). It has to be on your **`PATH`** when OpenTofu runs the Packer `local-exec` (same shell as `tofu apply`).
 - **Python 3** (used by the SSM publish script)
 
 Your AWS account needs:
@@ -345,6 +341,8 @@ Extensions and settings persist in your home directory under `~/.vscode` and `~/
 ---
 
 ## Useful Commands
+
+The helper scripts under `scripts/` are meant to run as `./scripts/foo.sh`. If you get **Permission denied**, your checkout may have dropped the executable bit—`chmod +x` the script (or run `bash scripts/foo.sh`). **`tofu`** and **`packer`** still need to be on your `PATH` where you run those scripts.
 
 ```bash
 tofu output -raw pybullet_host_dcv_url        # DCV URL
@@ -445,14 +443,16 @@ Each Packer build runs a **g5.xlarge** for 30-60+ minutes and creates an AMI sna
 
 Clean up old AMIs and snapshots when iterating — they accumulate fast.
 
-**Stop the instance when idle:** Stopping the VM stops **compute** billing; the root gp3 volume still costs storage. Example (replace id/region/profile as needed):
+**Stop the instance when idle:** Stopping the VM stops **compute** billing; the root gp3 volume still costs storage. From the repo root:
 
 ```bash
-aws ec2 stop-instances --instance-ids "$(cd infrastructure && tofu output -raw pybullet_host_instance_id)" \
-  --region "$(cd infrastructure && tofu output -raw aws_region)" --profile personal
+./scripts/stop-pybullet-host.sh        # request stop
+./scripts/stop-pybullet-host.sh --wait # wait until fully stopped
 ```
 
-The next `tofu apply` may start it again if OpenTofu reconciles desired state to **running**. To work only when you need the box, stop after use and run `apply` when you want it back online.
+Same thing by hand if you prefer raw AWS CLI: `aws ec2 stop-instances` with the instance id and region from `tofu output`.
+
+The next `tofu apply` may start the host again if the EC2 resource is supposed to be **running**. If you stopped it to save money, that’s fine—just know a full apply might wake it up.
 
 ---
 
@@ -490,6 +490,7 @@ aws-pybullet-environment/
 │   │   └── ec2-host-precheck.sh     # Sourced: start if stopped, wait running, reject terminated/builder
 │   ├── run-acceptance.sh            # Workstation: SSM + optional DCV curl (Phase 3 ✓)
 │   ├── run-pybullet-s3-sim-test.sh # Phase 4: SSM Run Command → GIF in S3
+│   ├── stop-pybullet-host.sh       # Workstation: stop EC2 host (optional --wait)
 │   ├── list-pybullet-sim-recordings.sh   # List GIFs in sim artifacts bucket
 │   ├── download-pybullet-sim-recording.sh # Download → recordings/ by default
 │   ├── pybullet_deep_test/
