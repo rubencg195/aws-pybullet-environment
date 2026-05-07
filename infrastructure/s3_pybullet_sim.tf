@@ -3,8 +3,10 @@
 # -----------------------------------------------------------------------------
 
 resource "aws_s3_bucket" "pybullet_sim" {
-  # bucket_prefix max length is 37; keep short so AWS appends a unique suffix.
-  bucket_prefix = "pyb-sim-"
+  bucket = local.pybullet_sim_bucket_name
+
+  # Sim GIFs are ephemeral (lifecycle on sim-runs/); allow tofu destroy without manual emptying.
+  force_destroy = true
 
   tags = {
     Name    = "${local.project_name}-pybullet-sim-artifacts"

@@ -172,4 +172,11 @@ That is normal: with **`null`**, OpenTofu wires the EC2 AMI to SSM, and the `nul
 
 ## Workstation: `aws s3 cp` denied on sim GIFs
 
-The instance role can **PutObject** on `sim-runs/*`; your laptop profile needs **`s3:GetObject`** (and `ListBucket` on the prefix) on the `pyb-sim-*` bucket to run `download-pybullet-sim-recording.sh`. PowerUser/Administrator covers it; tighter policies should allow read on that bucket or prefix.
+The instance role can **PutObject** on `sim-runs/*`; your laptop profile needs **`s3:GetObject`** (and `ListBucket` on the prefix) on the **`pyb-sim-<region>-<account-id>`** bucket to run `download-pybullet-sim-recording.sh`. PowerUser/Administrator covers it; tighter policies should allow read on that bucket or prefix.
+
+
+---
+
+## OpenTofu state looks inconsistent after interrupted apply
+
+If `tofu state list` is missing `module.pybullet_host.aws_instance.this` but `tofu output -raw pybullet_host_instance_id` still prints an id, treat outputs as stale and recover state first. Recommended order: check real EC2 resources with AWS CLI, then import or recreate the host so state matches reality, then run the bucket rename/apply steps.

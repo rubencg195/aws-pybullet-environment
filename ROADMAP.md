@@ -111,6 +111,15 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 
 ---
 
+
+### Current blockers (May 2026)
+
+| Blocker | Status | Notes |
+|---|---|---|
+| Interrupted `tofu apply` left partial state drift | OPEN | `module.pybullet_host` instance resource is missing from current state while outputs still reference an old instance id |
+| Bucket rename validation not completed end-to-end | OPEN | Code is updated to `pyb-sim-<region>-<account-id>`, but sim rerun + download verification is pending after state recovery |
+| One-step full apply can trigger unnecessary long paths during recovery | OPEN | Use targeted recovery/apply order to avoid accidental long Packer paths while reconciling EC2 and S3 state |
+
 ## Phase 5 — Production Hardening
 
 > **Priority: LOW** — For shared/team use, not blocking individual dev. *(Formerly “Phase 4” in earlier docs.)*

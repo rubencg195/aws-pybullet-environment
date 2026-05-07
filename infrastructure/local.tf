@@ -1,6 +1,9 @@
 locals {
   project_name = "aws-pybullet-environment"
 
+  # Globally unique per account/region; readable in the console (no random suffix).
+  pybullet_sim_bucket_name = "pyb-sim-${data.aws_region.current.id}-${data.aws_caller_identity.current.account_id}"
+
   # SSM String parameter written by Packer post-processor; OpenTofu reads it for module.ami_id.
   packer_golden_ami_ssm_parameter_name = "/pybullet/${local.project_name}/golden-ami-id"
 

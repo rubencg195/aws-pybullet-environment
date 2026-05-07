@@ -26,7 +26,15 @@ High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
 
 ### Phase 4 — what is done
 
-- OpenTofu: S3 artifacts bucket (`pyb-sim-*`), encryption, public access block, lifecycle on `sim-runs/`, EC2 inline policy for `s3:PutObject` on `sim-runs/*` (`infrastructure/s3_pybullet_sim.tf`).
+
+### Current status and blockers
+
+- **In progress:** Bucket naming has been changed in code from random-suffix (`bucket_prefix`) to deterministic `pyb-sim-<region>-<account-id>` (`local.pybullet_sim_bucket_name` + `aws_s3_bucket.pybullet_sim.bucket`).
+- **Blocker:** An earlier `tofu apply` was interrupted mid-run; the remote state currently has partial drift (the EC2 instance resource is missing from state while stale outputs still show an old instance id).
+- **Impact:** Normal full `tofu apply` can try to do too much at once (including Packer paths) while state is being recovered, which slowed bucket migration validation.
+- **Next recovery step:** Run a targeted infra recovery in this order: (1) reconcile EC2 state (import or recreate cleanly), (2) apply S3/IAM rename, (3) rerun `run-pybullet-s3-sim-test.sh`, (4) verify newest object lands in `pyb-sim-<region>-<account-id>` and download to `recordings/`.
+
+- OpenTofu: S3 artifacts bucket named **`pyb-sim-<region>-<account-id>`** (see `local.pybullet_sim_bucket_name`), encryption, public access block, lifecycle on `sim-runs/`, EC2 inline policy for `s3:PutObject` on `sim-runs/*` (`infrastructure/s3_pybullet_sim.tf`).
 - Workstation runner: `scripts/run-pybullet-s3-sim-test.sh` (SSM Run Command, base64-safe payload).
 - On-instance script: `scripts/pybullet_deep_test/run_sim_and_upload.py` (headless `DIRECT`, plane + R2-D2, TinyRenderer GIF, boto3 upload). Joint targets split so drive joints (legs, wheels, unnamed revolutes) carry most of the motion; head joints are quieter. Base `applyExternalForce` / `applyExternalTorque` plus a camera that tracks the base keeps translation and yaw readable in the GIF when URDF naming is ambiguous.
 - Packer provision script installs **`boto3`** in `/opt/pybullet-venv` (no fake `pybullet_data` pip package; URDFs ship with **`pybullet`**).
@@ -156,7 +164,7 @@ flowchart TB
   end
 
   subgraph obs["PyBullet sim artifacts"]
-    S3B["S3 bucket\n(prefix pyb-sim-*)"]
+    S3B["S3 bucket\npyb-sim-region-account"]
     LC["Lifecycle: expire\nsim-runs/ after 90d"]
     IAMS3["IAM: EC2 role\ns3:PutObject on\nsim-runs/*"]
   end
@@ -202,7 +210,7 @@ flowchart TB
   subgraph storage["Storage"]
     VOL["gp3 root volume"]
     INST --> VOL
-    BKT["S3: pyb-sim-*\nSSE-S3, public access block"]
+    BKT["S3: pyb-sim-region-account\nSSE-S3, public access block"]
     BKT --> LIFE["Lifecycle rule\nprefix sim-runs/"]
   end
 
