@@ -1,280 +1,130 @@
 # Remote GPU workstation for PyBullet simulation on AWS
 
-A GPU-powered cloud workstation for robotics and ML simulation. Uses **Packer** to build a golden AMI with everything pre-installed (NVIDIA drivers, GNOME desktop, **Visual Studio Code**, NICE DCV remote access, PyBullet), and **OpenTofu** to deploy it on AWS EC2. You connect from a browser or the DCV native app — no local GPU needed.
+You get an Ubuntu desktop on a GPU EC2 box: **NVIDIA** drivers, **GNOME**, **Visual Studio Code**, **NICE DCV**, and **PyBullet** in a Python venv. **[Packer](https://developer.hashicorp.com/packer)** bakes that into one AMI; **[OpenTofu](https://opentofu.org/)** deploys it. You open DCV in a browser or native client—no GPU on your laptop.
 
-**OS:** Ubuntu 24.04 LTS | See [ROADMAP.md](ROADMAP.md) for the full changelog
+**OS:** Ubuntu 24.04 LTS
+
+For phase history, changelogs, and future work, see **[ROADMAP.md](ROADMAP.md)**. Setup (tools, IAM) is **[SETUP.md](SETUP.md)**. When something breaks, start with **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)**.
 
 ## Recordings gallery
 
-Headless PyBullet run from the GPU host: checkerboard plane, stock R2-D2 URDF, TinyRenderer capture, then upload to S3. The clip below is the checked-in sample under `recordings/`; your own pulls from `download-pybullet-sim-recording.sh` land in the same folder by default.
+<p align="center">
+  <img src="recordings/r2d2_plane_sim.gif" alt="Headless R2-D2 plane simulation (animated GIF)" width="560" />
+</p>
 
-![Headless R2-D2 plane simulation (GIF)](recordings/r2d2_plane_sim.gif)
-
----
-
-## Roadmap & status
-
-High-level phases (detail and history in [ROADMAP.md](ROADMAP.md)):
-
-| Phase | Focus | Status |
-|-------|--------|--------|
-| **0–1** | AL2023 baseline → Ubuntu 24.04 golden AMI | Done |
-| **2** | VS Code on the desktop | Done |
-| **3** | Acceptance testing (`run-acceptance.sh`, on-instance checks) | Done |
-| **4** | **PyBullet headless sim + S3 artifacts** (GIF upload, least-privilege IAM) | **Done** |
-| **5** | Production hardening (IAM roles, lifecycle, CI/CD, KMS) | PENDING |
-
-### Phase 4 — what is done
-
-The sim bucket is **`pyb-sim-<region>-<account-id>`** (see `local.pybullet_sim_bucket_name` in `infrastructure/local.tf`). That replaced the older random-suffix name so you can spot the bucket in the console without guessing. IAM still allows the instance role to write only under **`sim-runs/*`**.
-
-- OpenTofu: S3 artifacts bucket **`pyb-sim-<region>-<account-id>`**, encryption, public access block, lifecycle on `sim-runs/`, EC2 inline policy for `s3:PutObject` on `sim-runs/*` (`infrastructure/s3_pybullet_sim.tf`).
-- Workstation runner: `scripts/run-pybullet-s3-sim-test.sh` (SSM Run Command, base64-safe payload).
-- On-instance script: `scripts/pybullet_deep_test/run_sim_and_upload.py` (headless `DIRECT`, plane + R2-D2, TinyRenderer GIF, boto3 upload). Joint targets split so drive joints (legs, wheels, unnamed revolutes) carry most of the motion; head joints are quieter. Base `applyExternalForce` / `applyExternalTorque` plus a camera that tracks the base keeps translation and yaw readable in the GIF when URDF naming is ambiguous.
-- Packer provision script installs **`boto3`** in `/opt/pybullet-venv` (no fake `pybullet_data` pip package; URDFs ship with **`pybullet`**).
-- Local pulls: `scripts/download-pybullet-sim-recording.sh` writes to **`recordings/<filename>`** by default; `.gitignore` drops stray GIFs but keeps **`recordings/r2d2_plane_sim.gif`** for the README gallery.
-- Documented **targeted** `tofu apply -target=…` for bucket + IAM only when you want to skip a Packer run.
-
-### Phase 4 — optional follow-ups
-
-- **`packer_ami_id_override`:** In `infrastructure/local.tf`, set an `ami-…` if you need to skip Packer and boot straight from a known image. The repo defaults to **`null`** so the next `tofu apply` can run Packer and refresh SSM. Expect roughly 30–60+ minutes when Packer runs.
-- **GPU / `nvidia-smi`:** If acceptance warns on **`nvidia-smi`**, rebuild the golden AMI (Packer) or replace the instance so the kernel matches the NVIDIA stack (see **TROUBLESHOOTING.md**).
-- **Runners:** **`scripts/lib/ec2-host-precheck.sh`** starts **stopped** instances, rejects **terminated** ids and **`…-packer-builder`**, and tolerates stale **`tofu output`** with clear errors.
-
-### Phase 4 — troubleshooting reference
-
-| Topic | Detail |
-|--------|--------|
-| **Stale `tofu output`** | Remote state can still list an old `pybullet_host_instance_id` after the `aws_instance` is gone — precheck calls **`describe-instances`** on the real API. |
-| **Stopped vs terminated** | **Stopped** → can **start**; **terminated** → need a **new** instance (`tofu apply`). |
-| **Packer builder** | **`…-packer-builder`** is not the DCV host (**`…-pybullet`**). |
-| **SSM `sh`** | **`AWS-RunShellScript`** uses **`/bin/sh`** — remote snippets must not use **`set -o pipefail`** (see **`run-pybullet-s3-sim-test.sh`**). |
-
-```mermaid
-flowchart LR
-  P3["Phase 3\nAcceptance"] --> P4["Phase 4\nSim + S3"]
-  P4 --> P5["Phase 5\nProd hardening"]
-```
-
----
-
-## Architecture
-
-### How it works
-
-```mermaid
-flowchart LR
-  subgraph client["Your machine"]
-    B["Browser or DCV app"]
-  end
-  subgraph aws["AWS EC2 (GPU instance)"]
-    DCV["NICE DCV :8443"]
-    DESK["GNOME desktop"]
-    PB["PyBullet + Python"]
-    GPU["NVIDIA GPU"]
-  end
-  B -->|"TLS :8443"| DCV
-  DCV --> DESK
-  DESK --> PB
-  GPU --> PB
-  GPU --> DESK
-```
-
-### Build and deploy pipeline
-
-```mermaid
-flowchart LR
-  subgraph dev["Your laptop (WSL2 / Linux)"]
-    TOFU["tofu apply"]
-    PKR["packer build\n(temporary g5 builder)"]
-  end
-  subgraph aws["AWS"]
-    AMI["Golden AMI\n(registered in SSM)"]
-    EC2["EC2 g5.xlarge\n(ready to use)"]
-  end
-  subgraph client["Client"]
-    DCVC["DCV :8443"]
-  end
-  TOFU --> PKR
-  PKR --> AMI
-  TOFU --> EC2
-  EC2 --> AMI
-  DCVC --> EC2
-```
-
-### DevOps flow
-
-```mermaid
-flowchart TD
-  DEV["Developer edits\nlocal.tf / provision script / Packer template"]
-  DEV -->|"git push"| REPO["GitHub repo"]
-  DEV -->|"tofu apply"| PLAN{"OpenTofu detects\nfile hash changes?"}
-
-  PLAN -->|No changes| SKIP["Skip Packer\n→ EC2 already up to date"]
-  PLAN -->|Files changed| BUILD["Packer spins up\ntemporary g5.xlarge"]
-
-  BUILD --> PROVISION["provision-ubuntu.sh\n1. apt upgrade\n2. NVIDIA drivers\n3. GNOME + GDM\n4. DCV install + config\n5. PyBullet venv"]
-  PROVISION --> REBOOT["Reboot + sanity checks\nnvidia-smi, dcvserver,\nPyBullet import"]
-  REBOOT -->|Pass| SNAPSHOT["Create AMI snapshot"]
-  REBOOT -->|Fail| ABORT["Build fails\n→ no broken AMI published"]
-
-  SNAPSHOT --> PUBLISH["publish-ami-ssm.sh\n→ SSM Parameter Store"]
-  PUBLISH --> DEPLOY["OpenTofu reads SSM\n→ launches EC2 with new AMI"]
-
-  DEPLOY --> SG["Security group\nauto-locked to your IP"]
-  DEPLOY --> IAM["IAM role\n+ SSM Session Manager"]
-  DEPLOY --> LIVE["Instance ready\n→ DCV on :8443"]
-```
-
-### What's inside the infrastructure
-
-```mermaid
-flowchart TB
-  subgraph iac["Infrastructure as Code"]
-    OT["OpenTofu"]
-    NR["null_resource → packer build"]
-    SSM["SSM Parameter Store\n/pybullet/aws-pybullet-environment/golden-ami-id"]
-    MOD["module ec2-instance"]
-  end
-
-  subgraph packer["Packer AMI Pipeline"]
-    SRC["Ubuntu 24.04 base AMI"]
-    PROV["provision-ubuntu.sh\nNVIDIA + GNOME + DCV + PyBullet"]
-    REBOOT["reboot + sanity checks"]
-    POST["manifest → publish to SSM"]
-  end
-
-  subgraph net["Networking"]
-    VPC["VPC"]
-    SG["Security Group\nSSH :22, DCV :8443\n(auto-locked to your IP)"]
-    SN["Public subnet"]
-  end
-
-  subgraph ami["Golden AMI"]
-    NV["NVIDIA drivers"]
-    GN["GNOME desktop"]
-    DCVS["NICE DCV 2025.0"]
-    VENV["/opt/pybullet-venv"]
-  end
-
-  subgraph obs["PyBullet sim artifacts"]
-    S3B["S3 bucket\npyb-sim-region-account"]
-    LC["Lifecycle: expire\nsim-runs/ after 90d"]
-    IAMS3["IAM: EC2 role\ns3:PutObject on\nsim-runs/*"]
-  end
-
-  OT --> NR
-  NR --> SRC
-  SRC --> PROV
-  PROV --> REBOOT
-  REBOOT --> POST
-  POST --> SSM
-  SSM --> MOD
-  MOD --> VPC
-  MOD --> SG
-  MOD --> SN
-  MOD --> ami
-  MOD --> IAMS3
-  IAMS3 --> S3B
-  S3B --> LC
-```
-
-### AWS resources (detailed)
-
-```mermaid
-flowchart TB
-  subgraph iam["IAM"]
-    EC2R["EC2 instance profile role\nAmazonSSMManagedInstanceCore"]
-    S3POL["Inline policy: PutObject\nbucket/sim-runs/*"]
-    EC2R --> S3POL
-  end
-
-  subgraph compute["EC2"]
-    INST["g5.xlarge PyBullet host\npublic subnet, IMDSv2"]
-    INST --> EC2R
-  end
-
-  subgraph net["Networking"]
-    VPCN["VPC + public subnet"]
-    SGN["SG: 22, 8443 from your IP"]
-    INST --> VPCN
-    INST --> SGN
-  end
-
-  subgraph storage["Storage"]
-    VOL["gp3 root volume"]
-    INST --> VOL
-    BKT["S3: pyb-sim-region-account\nSSE-S3, public access block"]
-    BKT --> LIFE["Lifecycle rule\nprefix sim-runs/"]
-  end
-
-  subgraph ops["Operations"]
-    SSM["SSM: Session Manager + Run Command"]
-    PKR["Packer null_resource →\nbuilder + AMI + SSM param"]
-    INST --> SSM
-    PKR --> INST
-  end
-
-  subgraph client2["Workstation"]
-    TOFU2["tofu apply"]
-    SCR["run-acceptance.sh\nrun-pybullet-s3-sim-test.sh"]
-    TOFU2 --> PKR
-    SCR --> SSM
-  end
-
-  INST -->|"Run Command uploads GIF"| BKT
-```
+<p align="center"><em>Sample run: checkerboard plane, stock R2-D2 URDF, TinyRenderer → GIF (also uploaded to S3 by <code>run-pybullet-s3-sim-test.sh</code>). File: <code>recordings/r2d2_plane_sim.gif</code>.</em></p>
 
 ---
 
 ## What you get
 
-| Component | Details |
-|-----------|---------|
+| | |
+|--|--|
 | **OS** | Ubuntu 24.04 LTS |
-| **GPU** | NVIDIA drivers installed for g4dn/g5/g6 instances |
-| **Desktop** | GNOME with GDM, Wayland disabled |
-| **Remote access** | NICE DCV 2025.0 on port 8443 (pinned + SHA256 verified) |
-| **IDE** | Visual Studio Code (`code`) from Microsoft apt repo — launch from GNOME in DCV |
-| **Simulation** | PyBullet in `/opt/pybullet-venv` with numpy, scipy, Pillow, matplotlib, boto3 (URDFs via bundled `pybullet_data` module) |
-| **Security** | SG auto-locked to your public IP, IMDSv2, encrypted gp3 volumes |
-| **Access** | SSM Session Manager for shell access (no SSH key required) |
+| **GPU** | NVIDIA drivers for typical g4/g5/g6 instance types |
+| **Desktop** | GNOME + GDM (Wayland off) |
+| **Remote UI** | NICE DCV on **TCP 8443** (pinned build, checksum checked in Packer) |
+| **Editor** | Microsoft **`code`** package—launch from the desktop |
+| **Simulation** | PyBullet in **`/opt/pybullet-venv`** (`numpy`, `scipy`, Pillow, **`boto3`**, etc.; URDFs via bundled **`pybullet_data`**) |
+| **Access** | **SSM Session Manager** (no SSH keys required for admin) |
+| **Network** | Security group restricts **SSH 22** and **DCV 8443** to your public IP (detected when you **`tofu apply`**) |
+
+---
+
+## How it fits together
+
+**You:** run OpenTofu from your Mac, Linux box, or WSL2—it talks to AWS, optionally runs Packer, then creates or updates the EC2 instance. **AWS:** keeps the golden AMI id in **SSM**; the instance boots from it. **You again:** connect with DCV for a full desktop or use scripts that talk to the instance via **SSM**.
+
+```mermaid
+flowchart LR
+  subgraph laptop["Your machine"]
+    TOFU["OpenTofu"]
+    SCR["Scripts\n(SSM helpers)"]
+  end
+  subgraph aws["AWS"]
+    PK["Packer builder\n(short-lived g5, etc.)"]
+    AMI["Golden AMI → SSM param"]
+    EC2["GPU instance\npublic subnet"]
+    DCV["DCV :8443"]
+    S3["S3 bucket\nsim GIFs"]
+  end
+  TOFU --> PK
+  PK --> AMI
+  TOFU --> EC2
+  AMI --> EC2
+  subgraph you["Session"]
+    B["Browser / DCV app"]
+  end
+  B --> DCV
+  EC2 --> DCV
+  SCR --> EC2
+  EC2 --> S3
+```
+
+```mermaid
+flowchart LR
+  subgraph client["You"]
+    B["Browser or DCV app"]
+  end
+  subgraph host["EC2 GPU host"]
+    DCV["DCV"]
+    DK["Desktop + VS Code"]
+    PB["PyBullet venv"]
+  end
+  B -->|"TLS :8443"| DCV
+  DCV --> DK
+  DK --> PB
+```
+
+### Build and AMI refresh
+
+Roughly:
+
+1. You run **`tofu apply`** from **`infrastructure/`**.
+2. If the Packer template or provision scripts changed, OpenTofu runs **Packer** (expect **~30–60+ minutes** on a **`g5.xlarge`** builder).
+3. A new AMI is registered; its id is written to **SSM** (parameter name is in **`outputs`** / **`local.tf`**).
+4. EC2 is created or updated to use that AMI.
+
+If you haven’t changed anything that triggers Packer, a later apply may only refresh networking or sizing.
 
 ---
 
 ## Prerequisites
 
-You need these installed on the machine where you'll run `tofu apply`:
+On the machine that runs **`tofu`**:
 
-- **AWS CLI v2** with a configured profile (default: `personal`)
-- **OpenTofu** (`tofu` CLI)
-- **Packer** — see [SETUP.md](SETUP.md). It has to be on your **`PATH`** when OpenTofu runs the Packer `local-exec` (same shell as `tofu apply`).
-- **Python 3** (used by the SSM publish script)
+| Need | Notes |
+|------|--------|
+| **AWS CLI v2** | Profile aligned with **`infrastructure/provider.tf`** (often **`personal`**) |
+| **OpenTofu** **`tofu`** | On **`PATH`** |
+| **Packer** | On **`PATH`** for OpenTofu’s Packer **`local-exec`** (same shell as **`tofu apply`)** — see **[SETUP.md](SETUP.md)** |
+| **Python 3** | Used when publishing AMI id to SSM |
 
-Your AWS account needs:
-- A **VPC** with a `Name` tag matching `local.vpc_name` (default: `default-vpc`)
-- A **public subnet** with `Name` tag containing `public`
-- IAM permissions for EC2, SSM, and Packer — see [SETUP.md](SETUP.md) for details
+In AWS:
+
+- A **VPC** whose **`Name`** matches **`local.vpc_name`** (default **`default-vpc`**).
+- A **public subnet** whose **`Name`** contains **`public`**.
+- Enough IAM for EC2, SSM, and Packer (**[SETUP.md](SETUP.md)**).
 
 ---
 
-## Quick Start
+## Quick start
 
 ### 1. Configure
 
-Edit `infrastructure/local.tf`:
+Edit **`infrastructure/local.tf`** (subnet/VPC/IP rules, instance size, AMI override):
 
-| Setting | What it does |
-|---------|-------------|
-| `vpc_name` | Must match your VPC's `Name` tag |
-| `aws_cli_profile` | Must match `provider.tf` (default: `personal`) |
-| `ec2_instance_type` | GPU instance type (default: `g5.xlarge`) |
-| `allowed_ingress_cidrs` | Leave empty to auto-detect your IP, or set explicit CIDRs |
-| `packer_ami_id_override` | Default **`null`** (Packer + SSM golden AMI). Set to a specific `ami-…` only when you intentionally skip Packer |
+| Setting | Purpose |
+|---------|---------|
+| **`vpc_name`** | Must match your VPC **`Name`** tag |
+| **`aws_cli_profile`** | Matches AWS provider (**`personal`** by default) |
+| **`ec2_instance_type`** | e.g. **`g5.xlarge`** |
+| **`allowed_ingress_cidrs`** | Empty → auto-set from your egress IP |
+| **`packer_ami_id_override`** | **`null`** = build/use Packer pipeline and SSM. Set **`ami-…`** only to skip Packer on purpose |
 
 ### 2. Deploy
 
-**First time** (no SSM parameter yet — Packer must run). Use this when `packer_ami_id_override` is **`null`** in `local.tf`:
+First time (**no golden AMI parameter yet**) with **`packer_ami_id_override = null`**:
 
 ```bash
 cd infrastructure
@@ -283,249 +133,330 @@ tofu apply -auto-approve -target=null_resource.packer_pybullet_ami[0]
 tofu apply -auto-approve
 ```
 
-**After that**, a single command is enough:
+After that, normally:
 
 ```bash
 cd infrastructure
 tofu apply -auto-approve
 ```
 
-> The Packer build takes 30-60 minutes (it spins up a g5 to install NVIDIA drivers). The AMI is fully baked — instances boot ready to use with no cloud-init wait.
+### 3. Connect (DCV)
 
-### 3. Connect
-
-**Set the DCV password** (via SSM — this runs on the EC2 instance, not your laptop):
+Start SSM (**replace profile if needed**):
 
 ```bash
 aws ssm start-session \
-  --target "$(tofu output -raw pybullet_host_instance_id)" \
-  --region "$(tofu output -raw aws_region)" \
+  --target "$(cd infrastructure && tofu output -raw pybullet_host_instance_id)" \
+  --region "$(cd infrastructure && tofu output -raw aws_region)" \
   --profile personal
 ```
 
-Then inside the SSM session:
+On the instance:
 
 ```bash
 sudo passwd ubuntu
 ```
 
-**Open DCV in your browser:**
+Open the DCV URL (from **`tofu output -raw pybullet_host_dcv_url`**), trust the certificate once, log in as **`ubuntu`**.
 
-```bash
-tofu output -raw pybullet_host_dcv_url
-```
-
-Go to the URL, accept the self-signed certificate, and log in as `ubuntu` with the password you just set.
-
-### 4. Verify PyBullet
-
-In a terminal on the remote desktop:
+Sanity-check PyBullet in a desktop terminal:
 
 ```bash
 source /opt/pybullet-venv/bin/activate
 python -c "import pybullet as p; c=p.connect(p.DIRECT); print('PyBullet OK, id =', c); p.disconnect()"
 ```
 
-### 5. VS Code
-
-Open **Activities** (top-left) and search for **Visual Studio Code**, or run in a terminal:
-
-```bash
-code
-```
-
-Extensions and settings persist in your home directory under `~/.vscode` and `~/.config/Code`.
+Launch **Visual Studio Code** from GNOME (**Activities** → “Visual Studio Code”) or **`code`** in a shell.
 
 ---
 
-## Useful Commands
+## Scripts: flags, environment variables, examples
 
-The helper scripts under `scripts/` are meant to run as `./scripts/foo.sh`. If you get **Permission denied**, your checkout may have dropped the executable bit—`chmod +x` the script (or run `bash scripts/foo.sh`). **`tofu`** and **`packer`** still need to be on your `PATH` where you run those scripts.
+Everything below assumes you run commands from the **repository root**. Put **`tofu`** on **`PATH`** everywhere below; **`packer`** is only required on the box where you **`tofu apply`** when the Packer **`local-exec`** runs. Scripts ship **`chmod +x`** from git — use **`bash scripts/…`** or **`chmod +x scripts/*.sh`** if yours lost the executable bit.
+
+**AWS profile:** all of these honour **`AWS_PROFILE`** (defaults to **`personal`**, consistent with **`infrastructure/local.tf`** / **`provider.tf`**).
+
+---
+
+### `scripts/run-acceptance.sh`
+
+Runs **`scripts/acceptance/on-instance-checks.sh`** on the instance via SSM (Ubuntu 24.04, DCV, VS Code, PyBullet import; **`nvidia-smi`** on g4dn/g5/g6 is warning-only unless **`STRICT_ACCEPTANCE_GPU=1`**). Then, unless skipped, curls your public DCV URL from **this laptop** to sanity-check TLS reachability.
+
+**Flags:**
+
+| Flag | Meaning |
+|------|---------|
+| *(none)* | Run on-instance checks, then **`curl`** the DCV URL from the workstation |
+| **`--skip-external`** | Skip the workstation **`curl`** (useful if your current IP isn’t in the SG) |
+| **`-h`**, **`--help`** | Usage + environment-variable summary |
+
+**Environment:**
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| **`AWS_PROFILE`** | **`personal`** | AWS CLI profile |
+| **`STRICT_ACCEPTANCE_GPU`** | unset / **`0`** | Set to **`1`** to **fail** on **g4dn/g5/g6** when **`nvidia-smi`** breaks |
+| **`EC2_START_WAIT_MAX_SEC`** | **`600`** | Max seconds wait after **`ec2-host-precheck`** starts a stopped instance |
+
+**Examples:**
 
 ```bash
-tofu output -raw pybullet_host_dcv_url        # DCV URL
-tofu output -raw pybullet_host_public_ip       # Public IP
-tofu output -raw pybullet_host_instance_id     # Instance ID for SSM
-tofu output -raw pybullet_sim_artifacts_bucket # S3 bucket for deep PyBullet GIF test
+./scripts/run-acceptance.sh
+./scripts/run-acceptance.sh --skip-external
+STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh
+AWS_PROFILE=work ./scripts/run-acceptance.sh --skip-external
+STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh --skip-external
+./scripts/run-acceptance.sh --help
 ```
 
-**If your IP changed** (VPN, ISP reassignment, etc.), re-apply to update the security group:
+---
+
+### `scripts/run-pybullet-s3-sim-test.sh`
+
+Headless **`DIRECT`** sim plus GIF upload (**SSM Run Command** → **`scripts/pybullet_deep_test/run_sim_and_upload.py`**). Bucket/prefix/instance id come from OpenTofu outputs and **`tofu`**. No CLI flags besides what **`bash`** passes through (there are none implemented).
+
+**Environment (workstation):**
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| **`AWS_PROFILE`** | **`personal`** | AWS CLI profile for SSM |
+
+**On-instance (set by the runner; only if you run the Python by hand):** **`PYBULLET_S3_BUCKET`** (required), **`PYBULLET_S3_PREFIX`** (optional, default **`sim-runs`**), **`EC2_INSTANCE_ID`**, **`AWS_DEFAULT_REGION`** / **`AWS_REGION`**.
+
+**Examples:**
 
 ```bash
-tofu apply -auto-approve
+./scripts/run-pybullet-s3-sim-test.sh
+AWS_PROFILE=work ./scripts/run-pybullet-s3-sim-test.sh
+bash ./scripts/run-pybullet-s3-sim-test.sh   # same, if chmod is missing
 ```
 
-**Replace the instance** after a new AMI build:
+---
+
+### `scripts/list-pybullet-sim-recordings.sh`
+
+Lists **`.gif`** objects under **`${PYBULLET_S3_PREFIX}/`** (default **`sim-runs`**) in the artifacts bucket (**`tofu output pybullet_sim_artifacts_bucket`**), newest Key first.
+
+**Flags:**
+
+| Flag | Meaning |
+|------|---------|
+| *(none)* | Table: **`LastModified`**, size, **`s3://`** URI |
+| **`--uris-only`** | One **`s3://…`** URI per line, newest first |
+| **`-h`**, **`--help`** | Minimal usage |
+
+**Environment:**
+
+| Variable | Default |
+|----------|---------|
+| **`AWS_PROFILE`** | **`personal`** |
+| **`PYBULLET_S3_PREFIX`** | **`sim-runs`** |
+
+**Examples:**
+
+```bash
+./scripts/list-pybullet-sim-recordings.sh
+./scripts/list-pybullet-sim-recordings.sh --uris-only
+FIRST="$(./scripts/list-pybullet-sim-recordings.sh --uris-only | head -1)"
+echo "$FIRST"
+PYBULLET_S3_PREFIX=sim-runs ./scripts/list-pybullet-sim-recordings.sh
+AWS_PROFILE=work ./scripts/list-pybullet-sim-recordings.sh --uris-only
+```
+
+---
+
+### `scripts/download-pybullet-sim-recording.sh`
+
+**Flags:** **`--help`**, **`-h`** — print usage and exit (**no positional args** consumed).
+
+**Environment:** **`AWS_PROFILE`** (default **`personal`**).
+
+Downloads one object. **First argument:** an **`s3://bucket/key`** URI, an **HTTPS virtual-hosted-style** S3 URL (`https://bucket.s3.region.amazonaws.com/key` or `https://bucket.s3.amazonaws.com/key`), or **just the object key** (must look like **`sim-runs/i-123/…/file.gif`** — script requires a **`/`** so it knows it isn’t garbage; OpenTofu supplies the bucket). **Second argument (optional):** destination file — omitted → **`recordings/<basename of key>`**; bare **`name.gif`** → **`recordings/name.gif`**; **`path/with/slash.gif`** relative to repo root; **`/abs/path`** as-is.
+
+**Examples:**
+
+```bash
+# Newest GIF in bucket → recordings/r2d2_plane_sim.gif (default basename)
+
+URI="$(./scripts/list-pybullet-sim-recordings.sh --uris-only | head -1)"
+./scripts/download-pybullet-sim-recording.sh "$URI"
+
+./scripts/run-pybullet-s3-sim-test.sh
+LATEST="$(./scripts/list-pybullet-sim-recordings.sh --uris-only | head -1)"
+./scripts/download-pybullet-sim-recording.sh "$LATEST"
+
+./scripts/download-pybullet-sim-recording.sh \
+  's3://YOUR_BUCKET/sim-runs/i-XXX/20260101T120000Z/r2d2_plane_sim.gif'
+
+./scripts/download-pybullet-sim-recording.sh \
+  'https://YOUR_BUCKET.s3.us-east-1.amazonaws.com/sim-runs/i-XXX/run/r2d2_plane_sim.gif'
+
+./scripts/download-pybullet-sim-recording.sh \
+  'sim-runs/i-XXX/20260101T120000Z/r2d2_plane_sim.gif'
+
+./scripts/download-pybullet-sim-recording.sh "$URI" 'my-run.gif'
+./scripts/download-pybullet-sim-recording.sh "$URI" 'artifacts/keep/my-run.gif'
+./scripts/download-pybullet-sim-recording.sh "$URI" '/tmp/from-s3.gif'
+./scripts/download-pybullet-sim-recording.sh --help
+
+source_uri='s3://...'
+./scripts/download-pybullet-sim-recording.sh "$source_uri" "$(basename "${source_uri%.gif}")-copy.gif"
+
+./scripts/list-pybullet-sim-recordings.sh --uris-only | head -1 | \
+  xargs -I{} ./scripts/download-pybullet-sim-recording.sh {}
+```
+
+Replace **`YOUR_BUCKET`** with the value of **`cd infrastructure && tofu output -raw pybullet_sim_artifacts_bucket`** where you paste literals.
+
+For **`--help`**, **`download-pybullet-sim-recording.sh`** prints usage and exits (**no download** performed).
+
+---
+
+### `scripts/stop-pybullet-host.sh`
+
+Calls **`aws ec2 stop-instances`** for **`pybullet_host_instance_id`** in **`aws_region`**. Refuses instances whose **Name** tag matches **`*packer-builder*`**.
+
+**Flags:**
+
+| Flag | Meaning |
+|------|---------|
+| *(none)* | Request stop, return immediately |
+| **`--wait`** | **`aws ec2 wait instance-stopped`** after the API call |
+| **`-h`**, **`--help`** | Usage |
+
+**Environment:**
+
+| Variable | Default |
+|----------|---------|
+| **`AWS_PROFILE`** | **`personal`** |
+
+**Examples:**
+
+```bash
+./scripts/stop-pybullet-host.sh
+./scripts/stop-pybullet-host.sh --wait
+AWS_PROFILE=work ./scripts/stop-pybullet-host.sh --wait
+./scripts/stop-pybullet-host.sh --help
+```
+
+---
+
+### `scripts/acceptance/on-instance-checks.sh`
+
+Meant for **SSM Session Manager** when you SSH “in”, or invoked by **`run-acceptance.sh`**. Runs on the EC2 box; **does not call OpenTofu**.
+
+**Environment (on instance only):**
+
+| Variable | Effect |
+|----------|--------|
+| **`STRICT_ACCEPTANCE_GPU`** | **`1`** → **`nvidia-smi`** failure on GPU types is a hard **FAIL** |
+
+**Example:**
+
+```bash
+sudo -E bash scripts/acceptance/on-instance-checks.sh
+# inside repo clone on VM, or after copying script:
+STRICT_ACCEPTANCE_GPU=1 bash /path/to/on-instance-checks.sh
+```
+
+---
+
+### **`scripts/lib/ec2-host-precheck.sh`** (library)
+
+Not a runnable entrypoint. **`source`**‘d by **`run-acceptance.sh`** and **`run-pybullet-s3-sim-test.sh`**. Start/stop/instance-id validation lives here.
+
+---
+
+## OpenTofu outputs (handy snippets)
+
+Common **`tofu output`** values (run from **`infrastructure/`**):
+
+```bash
+tofu output -raw pybullet_host_dcv_url
+tofu output -raw pybullet_host_public_ip
+tofu output -raw pybullet_host_instance_id
+tofu output -raw pybullet_sim_artifacts_bucket
+```
+
+If your home IP moved (VPN, etc.), **`tofu apply -auto-approve`** refreshes the security group.
+
+Force a **new EC2** from the current AMI—see **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** for context:
 
 ```bash
 tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'
 ```
 
-### Acceptance tests (Phase 3 — done)
+### Apply only S3 + IAM (skip Packer this round)
 
-From the **repository root**, with OpenTofu initialized. The runner defaults to `AWS_PROFILE=personal` (override if your `provider.tf` uses another profile):
-
-```bash
-./scripts/run-acceptance.sh
-```
-
-This waits for SSM, runs `scripts/acceptance/on-instance-checks.sh` on the instance (Ubuntu 24.04, DCV, VS Code, PyBullet; `nvidia-smi` on g4/g5/g6 is a **warning** unless `STRICT_ACCEPTANCE_GPU=1`), then optionally `curl`s your public DCV URL. If your laptop’s IP is not in the security group, use:
+Example when you touched **`s3_pybullet_sim.tf`** and don’t want a full AMI build:
 
 ```bash
-./scripts/run-acceptance.sh --skip-external
+cd infrastructure
+tofu apply -auto-approve \
+  -target=aws_s3_bucket.pybullet_sim \
+  -target=aws_s3_bucket_public_access_block.pybullet_sim \
+  -target=aws_s3_bucket_server_side_encryption_configuration.pybullet_sim \
+  -target=aws_s3_bucket_lifecycle_configuration.pybullet_sim \
+  -target=aws_iam_role_policy.pybullet_host_s3_sim_upload
 ```
 
-Hard-fail when `nvidia-smi` is missing on GPU instance types:
+Then **`./scripts/run-pybullet-s3-sim-test.sh`** once the instance is **running** and SSM reports **Online**. Run Command stdout prints the **`s3://`** key; feed it into **`download-pybullet-sim-recording.sh`**.
+
+---
+
+## Cost & idle hosts
+
+Packer burns a **g5** for tens of minutes and leaves **snapshots/AMIs**—tag **`PyBulletPacker`** helps in Cost Explorer. Prune old AMIs when iterating.
+
+Stopping the VM stops **compute**; the **gp3** root disk still bills until you terminate.
 
 ```bash
-STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh
+./scripts/stop-pybullet-host.sh        # queue stop
+./scripts/stop-pybullet-host.sh --wait # wait for stopped state
 ```
 
-**Deep PyBullet + S3 test (Phase 4)** — headless `DIRECT` sim, stock plane + R2-D2 URDFs, animated GIF → S3:
-
-1. Apply OpenTofu so the artifacts bucket and EC2 `PutObject` policy exist (`infrastructure/s3_pybullet_sim.tf`). If you only added this file and want to **avoid** a Packer rebuild, apply the S3 resources in isolation:
-
-   ```bash
-   cd infrastructure
-   tofu apply -auto-approve \
-     -target=aws_s3_bucket.pybullet_sim \
-     -target=aws_s3_bucket_public_access_block.pybullet_sim \
-     -target=aws_s3_bucket_server_side_encryption_configuration.pybullet_sim \
-     -target=aws_s3_bucket_lifecycle_configuration.pybullet_sim \
-     -target=aws_iam_role_policy.pybullet_host_s3_sim_upload
-   ```
-
-2. Ensure the instance is **running** and SSM is Online.
-3. From the repo root:
-
-```bash
-./scripts/run-pybullet-s3-sim-test.sh
-```
-
-The script uses SSM **Run Command** to run `scripts/pybullet_deep_test/run_sim_and_upload.py` on the host. Objects land under `s3://<bucket>/sim-runs/…` by default (`PYBULLET_S3_PREFIX`; IAM allows only `sim-runs/*`). To use another prefix, add `export PYBULLET_S3_PREFIX=…` to the generated command in `scripts/run-pybullet-s3-sim-test.sh` and update `infrastructure/s3_pybullet_sim.tf` accordingly. Run Command output includes the object key.
-
-**List / download recordings (workstation, same AWS profile as `provider.tf`):**
-
-```bash
-./scripts/list-pybullet-sim-recordings.sh              # table: time, size, s3:// URI
-./scripts/list-pybullet-sim-recordings.sh --uris-only  # one URI per line, newest first
-
-./scripts/download-pybullet-sim-recording.sh 's3://bucket/sim-runs/.../r2d2_plane_sim.gif'
-# Default path: recordings/<basename> under the repo root (see script help for overrides)
-./scripts/download-pybullet-sim-recording.sh 'https://bucket.s3.us-east-1.amazonaws.com/sim-runs/.../file.gif' my-run.gif
-```
+A later **`tofu apply`** may start the box again if the EC2 definition is meant to stay **running**.
 
 ---
 
 ## Clipboard (Windows ↔ DCV)
 
-- **Web client**: Click the settings gear → enable bidirectional clipboard. Allow the browser permission prompt.
-- **Native client**: Connection/Preferences → enable clipboard redirection.
-- **GNOME terminal**: Paste with `Shift+Insert` or `Ctrl+Shift+V` (not `Ctrl+V`).
+- Web client: **Settings** → clipboard → enable both directions.
+
+- Native DCV client: enable clipboard redirection in preferences.
+
+- **GNOME Terminal:** **`Shift+Insert`** or **`Ctrl+Shift+V`** to paste—not plain **`Ctrl+V`**.
 
 ---
 
-## Security
+## Security (short)
 
-The security group auto-locks SSH (22) and DCV (8443) to the public IP of the machine that ran `tofu apply`. This uses `data "http"` against `checkip.amazonaws.com` — no manual IP management needed.
+Ingress to **22**/**8443** is tied to **`tofu apply`**’s view of your public IP (**`checkip.amazonaws.com`**). Fallbacks live in **`local.tf`** if you must open wider (not recommended by default).
 
-If auto-detection ever breaks, there's a commented `0.0.0.0/0` fallback in `local.tf`. You can also set `allowed_ingress_cidrs` to a manual list.
-
-`.gitattributes` forces LF line endings for `.tf`, `.pkr.hcl`, and `.sh` files to prevent CRLF issues on Windows.
+**`.gitattributes`** keeps **`.tf`**, **`.pkr.hcl`**, **`.sh`** as LF across Windows checkouts.
 
 ---
 
-## Cost
-
-Each Packer build runs a **g5.xlarge** for 30-60+ minutes and creates an AMI snapshot. Builder instances and snapshots are tagged with `Project` and `PyBulletPacker` so you can track costs in AWS Cost Explorer.
-
-Clean up old AMIs and snapshots when iterating — they accumulate fast.
-
-**Stop the instance when idle:** Stopping the VM stops **compute** billing; the root gp3 volume still costs storage. From the repo root:
-
-```bash
-./scripts/stop-pybullet-host.sh        # request stop
-./scripts/stop-pybullet-host.sh --wait # wait until fully stopped
-```
-
-Same thing by hand if you prefer raw AWS CLI: `aws ec2 stop-instances` with the instance id and region from `tofu output`.
-
-The next `tofu apply` may start the host again if the EC2 resource is supposed to be **running**. If you stopped it to save money, that’s fine—just know a full apply might wake it up.
-
----
-
-## Production notes (Phase 5.5–5.6)
-
-| Topic | Detail |
-|--------|--------|
-| **Builder vs runtime GPU** | Keep Packer `builder_instance_type` (`packer/pybullet-ubuntu.pkr.hcl`, default `g5.xlarge`) aligned with `ec2_instance_type` in `infrastructure/local.tf` (same **family**, e.g. g5). Mismatch can cause extra DKMS churn or driver surprises. |
-| **Root volume device name** | Ubuntu golden AMI mapping uses **`/dev/sda1`** in Packer. Legacy AL2023 used **`/dev/xvda`**. The EC2 module’s `root_block_device` omits `device_name` so the **AMI’s** root device is used automatically at launch. |
-
----
-
-## Rebuild Triggers
-
-Packer re-runs automatically when `tofu apply` detects changes in:
-- `packer/pybullet-ubuntu.pkr.hcl`
-- `packer/scripts/provision-ubuntu.sh`
-- `packer/scripts/publish-ami-ssm.sh`
-
-Or when the SSM parameter name changes.
-
----
-
-## Repository Layout
+## Repository layout
 
 ```
 aws-pybullet-environment/
-├── README.md                        # You're here
-├── recordings/                      # Local GIFs; sample checked in for gallery; other *.gif ignored
-├── SETUP.md                         # Tool installation and IAM setup
-├── TROUBLESHOOTING.md               # Common issues and fixes
-├── ROADMAP.md                       # What's done, what's next, dev guide
+├── README.md
+├── recordings/                     # Sample GIF tracked; other *.gif usually gitignored
+├── SETUP.md
+├── TROUBLESHOOTING.md
+├── ROADMAP.md
 ├── scripts/
-│   ├── lib/
-│   │   └── ec2-host-precheck.sh     # Sourced: start if stopped, wait running, reject terminated/builder
-│   ├── run-acceptance.sh            # Workstation: SSM + optional DCV curl (Phase 3 ✓)
-│   ├── run-pybullet-s3-sim-test.sh # Phase 4: SSM Run Command → GIF in S3
-│   ├── stop-pybullet-host.sh       # Workstation: stop EC2 host (optional --wait)
-│   ├── list-pybullet-sim-recordings.sh   # List GIFs in sim artifacts bucket
-│   ├── download-pybullet-sim-recording.sh # Download → recordings/ by default
-│   ├── pybullet_deep_test/
-│   │   └── run_sim_and_upload.py   # Invoked on EC2; plane + R2-D2, Pillow GIF, boto3
-│   └── acceptance/
-│       └── on-instance-checks.sh    # Runs on EC2 via SSM; can also run manually
-├── .gitattributes                   # LF enforcement for .tf, .pkr.hcl, .sh
-│
-├── infrastructure/                  # OpenTofu root module
-│   ├── provider.tf                  # AWS provider + S3 backend
-│   ├── local.tf                     # Settings: instance type, VPC, CIDRs
-│   ├── data.tf                      # VPC lookup, subnet discovery, IP detection
-│   ├── packer.tf                    # null_resource → packer build + SSM lookup
-│   ├── compute.tf                   # EC2 module wiring
-│   ├── s3_pybullet_sim.tf         # Sim artifacts bucket + EC2 PutObject policy
-│   ├── outputs.tf                   # Public IP, DCV URL, AMI id, S3 bucket, etc.
-│   └── modules/
-│       └── ec2-instance/
-│           ├── main.tf              # aws_instance (IMDSv2, gp3, tags)
-│           ├── variables.tf         # Module inputs
-│           ├── sg.tf                # Security group rules
-│           ├── iam.tf               # IAM role + SSM policy
-│           ├── data.tf              # Subnet discovery
-│           ├── locals.tf            # Subnet coalesce logic
-│           └── outputs.tf           # Module outputs
-│
-└── packer/                          # Golden AMI build
-    ├── pybullet-ubuntu.pkr.hcl      # Packer template (Ubuntu 24.04)
-    └── scripts/
-        ├── provision-ubuntu.sh       # Install script (NVIDIA, GNOME, DCV, PyBullet)
-        └── publish-ami-ssm.sh       # Publishes AMI id to SSM Parameter Store
+│   ├── lib/ec2-host-precheck.sh
+│   ├── run-acceptance.sh
+│   ├── run-pybullet-s3-sim-test.sh
+│   ├── stop-pybullet-host.sh
+│   ├── list-pybullet-sim-recordings.sh
+│   ├── download-pybullet-sim-recording.sh
+│   ├── pybullet_deep_test/run_sim_and_upload.py
+│   └── acceptance/on-instance-checks.sh
+├── infrastructure/                 # OpenTofu root (+ modules/ec2-instance)
+└── packer/                         # *.pkr.hcl + scripts/
 ```
 
----
-
-## More Info
-
-- **[SETUP.md](SETUP.md)** — How to install Packer, the SSM plugin, and what IAM permissions you need
-- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — DCV connection issues, OpenTofu errors, SSM problems
-- **[ROADMAP.md](ROADMAP.md)** — Phases 0–5, acceptance testing, sim/S3 integration, and future work
+Architecture diagrams (**client → EC2**, **build pipeline**, **SSM/S3**) and a detailed phased history live in **[ROADMAP.md](ROADMAP.md)**.

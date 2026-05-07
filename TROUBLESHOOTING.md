@@ -4,6 +4,17 @@ Common issues and how to fix them. All commands assume you're in the `infrastruc
 
 ---
 
+## Sim runners (SSM) — quick reference
+
+| Situation | What to know |
+|-----------|----------------|
+| **Stale `tofu output` for instance id** | Outputs can lag after the EC2 resource is gone. Scripts use **`describe-instances`** instead of trusting output alone where it matters. |
+| **Stopped vs terminated** | **Stopped:** start again or let precheck/start scripts bring it up. **Terminated:** need a new instance from **`tofu apply`**. |
+| **Wrong host** | The **Packer** builder instance is tagged **`…-packer-builder`**. The workstation you want is **`…-pybullet`**. |
+| **`AWS-RunShellScript`** | Uses **`/bin/sh`** — remote one-liners must not use **`set -o pipefail`** ( **`run-pybullet-s3-sim-test.sh`** follows this ). |
+
+---
+
 ## Acceptance script warns: nvidia-smi failed on a GPU instance
 
 The AMI may have been built when a different kernel was “newest” than the one that booted at runtime, so DKMS modules might not load. Rebuild the golden AMI (`tofu apply` after changing the provision script) or replace the instance: `tofu apply -auto-approve -replace='module.pybullet_host.aws_instance.this'`. To **fail** the acceptance run when `nvidia-smi` is missing, run `STRICT_ACCEPTANCE_GPU=1 ./scripts/run-acceptance.sh` (or export the variable before `scripts/acceptance/on-instance-checks.sh` on the instance).
