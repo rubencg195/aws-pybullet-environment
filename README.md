@@ -100,6 +100,8 @@ On the machine that runs **`tofu`**:
 | **Packer** | On **`PATH`** for OpenTofu’s Packer **`local-exec`** (same shell as **`tofu apply`)** — see **[SETUP.md](SETUP.md)** |
 | **Python 3** | Used when publishing AMI id to SSM |
 
+**Optional — NICE DCV on your machine:** Connecting with a **web browser** to **`https://<public-ip>:8443`** does **not** require installing DCV locally. For the **native DCV viewer** on Windows, macOS, or Linux, use the installers linked from **[NICE DCV on AWS](https://aws.amazon.com/hpc/dcv/)**. If you maintain a Linux workstation (or want the full package stack used on EC2), Linux packaging and prerequisites are documented in **[Installing the NICE DCV server on Linux](https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-linux-server.html)** *(admin guide: server-side install; laptops usually install only the **viewer client**).* 
+
 In AWS:
 
 - A **VPC** whose **`Name`** matches **`local.vpc_name`** (default **`default-vpc`**).
@@ -140,9 +142,38 @@ cd infrastructure
 tofu apply -auto-approve
 ```
 
-### 3. Connect (DCV)
+### 3. Host address — OpenTofu outputs
 
-Start SSM (**replace profile if needed**):
+From **`infrastructure/`** (anywhere below, run **`cd infrastructure`** first or prefix paths).
+
+| Output | Meaning |
+|--------|---------|
+| **`pybullet_host_public_ip`** | Elastic IPv4 / public IP of the instance (**changes after stop/start unless you attach an EIP in AWS**) |
+| **`pybullet_host_dcv_url`** | **`https://<that-ip>:8443`** — use this in a browser as the DCV endpoint |
+| **`pybullet_host_instance_id`** | Needed for **`aws ssm start-session`** |
+
+```bash
+cd infrastructure
+tofu output -raw pybullet_host_public_ip
+tofu output -raw pybullet_host_dcv_url
+```
+
+Copy the URL, or open it from the shell (**Linux / WSL with a desktop**):
+
+```bash
+# After: cd infrastructure
+xdg-open "$(tofu output -raw pybullet_host_dcv_url)"          # many Linux setups
+# macOS:
+# open "$(cd infrastructure && tofu output -raw pybullet_host_dcv_url)"
+# WSL → Windows default browser (if wslview installed):
+# wslview "$(cd /path/to/repo/infrastructure && tofu output -raw pybullet_host_dcv_url)"
+```
+
+**`pybullet_host_dcv_url`** is the full **`https://…:8443`** URL built from **`pybullet_host_public_ip`**. Use **`pybullet_host_public_ip`** alone for ping, **`curl`**, or the native DCV client (**hostname** = that IP, **port** = **8443**).
+
+### 4. Set the **`ubuntu`** password (first time, over SSM)
+
+The DCV login is **not** your AWS password. Set a Linux password **on the instance** once:
 
 ```bash
 aws ssm start-session \
@@ -151,15 +182,28 @@ aws ssm start-session \
   --profile personal
 ```
 
-On the instance:
+Then in that session:
 
 ```bash
 sudo passwd ubuntu
 ```
 
-Open the DCV URL (from **`tofu output -raw pybullet_host_dcv_url`**), trust the certificate once, log in as **`ubuntu`**.
+Pick a strong password; remember it for the next step.
 
-Sanity-check PyBullet in a desktop terminal:
+### 5. Sign in with the **web** client (browser)
+
+1. In your browser, go to **`pybullet_host_dcv_url`** (e.g. **`https://3.xx.yy.zz:8443`**).
+2. You will get a **certificate warning** — the AMI uses a **self-signed** TLS cert. Use **Advanced → Proceed** (wording depends on the browser). This is normal for a lab box.
+3. You should see the **NICE DCV** connection page (web client).
+4. **Username:** **`ubuntu`** exactly (not **`ssm-user`** or **`root`**).
+5. **Password:** the one you set with **`sudo passwd ubuntu`**.
+6. After the session starts, you should get a **GNOME** desktop. Clipboard and quality options live in the **web client settings** (gear icon); see **Clipboard** at the end of this README if you paste from Windows.
+
+If the page does not load: confirm the instance is **running**, your **public IP** still matches **`tofu output`** (IPs change after stop/start), and your **current** public IP is allowed in the security group — run **`tofu apply -auto-approve`** from **`infrastructure/`** after a VPN or ISP change.
+
+### 6. Optional checks on the desktop
+
+Sanity-check PyBullet in a terminal on the remote desktop:
 
 ```bash
 source /opt/pybullet-venv/bin/activate
