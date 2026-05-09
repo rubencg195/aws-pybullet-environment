@@ -93,7 +93,19 @@ sleep 20
 sudo systemctl restart dcvserver
 ```
 
-**3. If `journalctl -u gdm` shows "maximum number of X display failures"** — NVIDIA drivers are missing or broken. Fix:
+**3. If `journalctl -u gdm` shows "maximum number of X display failures"** — the Xorg dummy driver config may be missing. Fix:
+
+```bash
+# Ensure the dummy driver is installed and xorg.conf exists
+sudo apt-get -y install xserver-xorg-video-dummy
+ls -l /etc/X11/xorg.conf        # should exist; if missing, see the resolution section below
+grep WaylandEnable /etc/gdm3/custom.conf  # should show WaylandEnable=false
+sudo systemctl restart gdm
+sleep 15
+sudo systemctl restart dcvserver
+```
+
+**4. If NVIDIA drivers are broken** (e.g. `nvidia-smi` fails):
 
 ```bash
 sudo apt-get -y install linux-headers-$(uname -r) build-essential dkms ubuntu-drivers-common
@@ -266,18 +278,21 @@ The Packer HCL post-reboot sanity check should **not** use `|| echo 'WARN…'` f
 # Via SSM RunShellScript or SSM session:
 sudo systemctl stop gdm
 sudo systemctl stop dcvserver
-sudo rm -f /etc/X11/xorg.conf
 sudo apt-get -y remove nvidia-prime ubuntu-drivers-common
 sudo apt-get -y autoremove
 sudo touch /run/u-d-c-nvidia-drm-was-loaded
+# Ensure the Xorg dummy driver config is still in place (do NOT delete xorg.conf)
+ls -l /etc/X11/xorg.conf
+# Ensure Wayland is disabled
+grep WaylandEnable /etc/gdm3/custom.conf
 sudo systemctl start gdm
 sleep 15
 sudo systemctl start dcvserver
 ```
 
-Verify: `ps aux | grep gnome-shell` should show Mutter running. `nvidia-smi` still works for CUDA compute.
+Verify: `ps aux | grep Xorg` should show Xorg running with the dummy driver. `nvidia-smi` still works for CUDA compute.
 
-**Why headless works:** The `--gpgpu` driver provides CUDA/compute support without X11 or nvidia-prime interference. GDM/Mutter starts with Wayland and uses software rendering (llvmpipe) for the desktop compositor, while CUDA/PyBullet physics runs on the GPU. DCV captures the Wayland desktop via its console session.
+**Why headless works:** The `--gpgpu` driver provides CUDA/compute support without X11 or nvidia-prime interference. GDM runs Xorg with the `xf86-video-dummy` driver for the desktop display (1920x1080 virtual framebuffer), while CUDA/PyBullet physics runs on the GPU. DCV captures the Xorg desktop via its console session.
 
 ---
 
@@ -289,18 +304,18 @@ Verify: `ps aux | grep gnome-shell` should show Mutter running. `nvidia-smi` sti
 
 **Root cause:** The EC2 virtual VGA adapter (Amazon Device 1111) uses the `simple-framebuffer` kernel driver, which is locked to the firmware-set boot resolution of 800x600. Neither Wayland/Mutter nor Xorg's modesetting driver can change it because `simpledrm` doesn't support modesetting. The `bochs-drm` kernel module (which would enable proper modesetting) is not available in the AWS kernel (`6.17.0-1013-aws`).
 
-**Solution (applied in provision script):** Install `xserver-xorg-video-dummy` and create `/etc/X11/xorg.conf` with a 1920x1080 virtual framebuffer (256 MB VRAM). Disable Wayland in GDM so Xorg uses the dummy driver instead of the locked simpledrm. DCV then captures and streams the 1920x1080 framebuffer.
+**Solution (applied in provision script):** Install `xserver-xorg-video-dummy` and create `/etc/X11/xorg.conf` with a virtual framebuffer up to 4K (256 MB VRAM, default mode 1920x1080). Disable Wayland in GDM so Xorg uses the dummy driver instead of the locked simpledrm. DCV then captures and streams the framebuffer, dynamically resizing to match the browser window via `enable-client-resize=true`.
 
 Key changes:
 1. `apt-get install xserver-xorg-video-dummy`
-2. Create `/etc/X11/xorg.conf` with dummy driver at 1920x1080
+2. Create `/etc/X11/xorg.conf` with dummy driver, default mode 1920x1080, `Virtual 4096 2160` (matches DCV `max-head-resolution`), 256 MB VRAM
 3. Set `WaylandEnable=false` in `/etc/gdm3/custom.conf`
-4. DCV `[display]` settings in `dcv.conf` for client resize support
+4. DCV `[display]` settings in `dcv.conf`: `enable-client-resize=true`, `max-head-resolution=(4096, 2160)`
 
 Verify on a running instance:
 ```bash
 grep -i layout /var/log/dcv/server.log | tail -3
-# Should show: size 1920x1080
+# Should show a resolution matching your browser window (e.g. 1920x1080, 2560x1440)
 ```
 
 **Approaches that did NOT work:**
@@ -317,8 +332,8 @@ grep -i layout /var/log/dcv/server.log | tail -3
 # Check what display resolution DCV sees
 grep -i layout /var/log/dcv/server.log | tail -5
 
-# Check Xorg is using the dummy driver
-grep -i dummy /var/log/Xorg.0.log | head -5
+# Check Xorg is using the dummy driver (log location varies)
+grep -ri dummy /var/log/Xorg.*.log ~/.local/share/xorg/Xorg.*.log 2>/dev/null | head -5
 
 # Check DCV agent resize attempts
 grep -i "resize\|layout" /var/log/dcv/agent.ubuntu.console.log | tail -10

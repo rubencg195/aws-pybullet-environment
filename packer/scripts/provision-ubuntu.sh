@@ -29,10 +29,10 @@ echo "Running kernel: $(uname -r)  |  Newest installed kernel: ${NEWEST_KERNEL}"
 
 # --- NVIDIA drivers (GPU instances only) ---
 # Use --gpgpu (headless) driver: provides CUDA compute without X11/nvidia-prime
-# interference. GDM/Mutter uses Wayland with software rendering for the desktop
-# compositor, while CUDA/PyBullet physics runs on the GPU. The full driver's
-# nvidia_drm module has kernel compatibility issues and gpu-manager/prime-switch
-# breaks GDM startup on EC2.
+# interference. GDM runs Xorg with the dummy driver for the desktop; the NVIDIA
+# GPU is used only for CUDA/PyBullet physics. The full driver's nvidia_drm
+# module has kernel compatibility issues and gpu-manager/prime-switch breaks
+# GDM startup on EC2.
 case "${INSTANCE_TYPE}" in
   g4dn*|g5*|g6*)
     apt-get -y install "linux-headers-${NEWEST_KERNEL}" build-essential dkms
@@ -61,7 +61,7 @@ apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-conf
 apt-get -y install xserver-xorg-video-dummy
 systemctl set-default graphical.target
 
-# Xorg dummy driver config: 1920x1080 virtual framebuffer (256 MB VRAM)
+# Xorg dummy driver config: default 1920x1080, up to 4K (256 MB VRAM)
 cat > /etc/X11/xorg.conf << 'XORGEOF'
 Section "Device"
     Identifier  "DummyDevice"
@@ -86,7 +86,7 @@ Section "Screen"
     SubSection "Display"
         Depth 24
         Modes "1920x1080_60.00" "1600x900_60.00" "1280x720_60.00"
-        Virtual 1920 1080
+        Virtual 4096 2160
     EndSubSection
 EndSection
 
