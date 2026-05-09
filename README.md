@@ -15,7 +15,7 @@ For phase history, changelogs, and future work, see **[ROADMAP.md](ROADMAP.md)**
 </tr>
 <tr>
 <td align="center"><img src="recordings/r2d2_plane_sim.gif" alt="R2-D2 plane sim" width="380" /></td>
-<td align="center"><img src="recordings/kuka_session.gif" alt="Kuka arm with joint sliders" width="380" /></td>
+<td align="center"><img src="images/PYB-session.gif" alt="Kuka arm with joint sliders" width="380" /></td>
 </tr>
 <tr>
 <td align="center"><em><code>run-pybullet-s3-sim-test.sh</code></em></td>
