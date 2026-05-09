@@ -111,7 +111,7 @@ build {
       "echo '=== Post-reboot sanity checks ==='",
       "uname -r",
       "echo '--- NVIDIA ---'",
-      "nvidia-smi --query-gpu=name,driver_version --format=csv,noheader || echo 'WARN: nvidia-smi failed (non-GPU builder?)'",
+      "nvidia-smi --query-gpu=name,driver_version --format=csv,noheader",
       "echo '--- DCV ---'",
       "sudo systemctl is-active dcvserver",
       "echo '--- PyBullet ---'",

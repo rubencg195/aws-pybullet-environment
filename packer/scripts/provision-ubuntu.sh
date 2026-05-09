@@ -28,11 +28,23 @@ NEWEST_KERNEL="$(ls -1 /boot/vmlinuz-* | sort -V | tail -1 | sed 's|/boot/vmlinu
 echo "Running kernel: $(uname -r)  |  Newest installed kernel: ${NEWEST_KERNEL}"
 
 # --- NVIDIA drivers (GPU instances only) ---
+# Use --gpgpu (headless) driver: provides CUDA compute without X11/nvidia-prime
+# interference. GDM/Mutter uses Wayland with software rendering for the desktop
+# compositor, while CUDA/PyBullet physics runs on the GPU. The full driver's
+# nvidia_drm module has kernel compatibility issues and gpu-manager/prime-switch
+# breaks GDM startup on EC2.
 case "${INSTANCE_TYPE}" in
   g4dn*|g5*|g6*)
     apt-get -y install "linux-headers-${NEWEST_KERNEL}" build-essential dkms
     apt-get -y install ubuntu-drivers-common
     ubuntu-drivers install --gpgpu
+    # --gpgpu omits nvidia-utils (nvidia-smi); detect the driver series and add it.
+    NVIDIA_VER="$(dpkg -l 'nvidia-dkms-*-server' 2>/dev/null \
+      | awk '/^ii/{print $2}' | head -1 | grep -oP '\d+' | head -1 || true)"
+    if [ -n "${NVIDIA_VER}" ]; then
+      apt-get -y install "nvidia-utils-${NVIDIA_VER}-server" || \
+        apt-get -y install "nvidia-utils-${NVIDIA_VER}"
+    fi
     dkms autoinstall -k "${NEWEST_KERNEL}" || true
     ;;
   *)
@@ -41,19 +53,13 @@ case "${INSTANCE_TYPE}" in
 esac
 
 # --- Desktop environment ---
+# GDM uses Wayland by default (Mutter compositor). This works on EC2 GPU
+# instances where nvidia_drm may not load; Mutter falls back to software
+# rendering for the desktop while CUDA compute uses the GPU directly.
 apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install ubuntu-desktop-minimal
-install -d /etc/gdm3
-touch /etc/gdm3/custom.conf
-if ! grep -qF 'WaylandEnable=false' /etc/gdm3/custom.conf; then
-  if grep -q '^\[daemon\]' /etc/gdm3/custom.conf; then
-    sed -i '/^\[daemon\]/a WaylandEnable=false' /etc/gdm3/custom.conf
-  else
-    printf '%s\n' '[daemon]' 'WaylandEnable=false' >> /etc/gdm3/custom.conf
-  fi
-fi
 systemctl set-default graphical.target
 
-# --- Build tools and Python ---
+# --- Build tools, Python, and utilities ---
 apt-get -y install \
   python3 \
   python3-pip \
@@ -70,7 +76,11 @@ apt-get -y install \
   unzip \
   ca-certificates \
   apt-transport-https \
-  gnupg
+  gnupg \
+  mesa-utils \
+  ffmpeg \
+  xdg-utils \
+  dbus-x11
 
 # --- Visual Studio Code (desktop; use inside DCV / GNOME — Path A) ---
 install -d /etc/apt/keyrings
@@ -127,8 +137,9 @@ if ! grep -q 'pybullet-venv' /home/ubuntu/.bashrc 2>/dev/null; then
   echo "source ${VENV}/bin/activate" >> /home/ubuntu/.bashrc
 fi
 
-# --- DCV config: automatic console session ---
+# --- DCV config ---
 if [ -f /etc/dcv/dcv.conf ]; then
+  # Automatic console session
   if ! grep -qF '[session-management/automatic-console-session]' /etc/dcv/dcv.conf; then
     printf '\n[session-management/automatic-console-session]\n' >> /etc/dcv/dcv.conf
   fi
@@ -136,6 +147,15 @@ if [ -f /etc/dcv/dcv.conf ]; then
     sed -i '/^\[session-management\/automatic-console-session\]/a owner="ubuntu"\nstorage-root="%home%"' /etc/dcv/dcv.conf
   fi
   sed -i 's/^#create-session/create-session/g' /etc/dcv/dcv.conf || true
+
+  # Display: allow the web client to resize up to 4K and auto-adapt to the
+  # browser window size instead of being stuck at a small fixed resolution.
+  if ! grep -qF '[display]' /etc/dcv/dcv.conf; then
+    printf '\n[display]\n' >> /etc/dcv/dcv.conf
+  fi
+  # Remove any existing values we are about to set (idempotent re-runs)
+  sed -i '/^web-client-max-head-resolution/d; /^max-head-resolution/d; /^enable-client-resize/d; /^console-session-default-layout/d' /etc/dcv/dcv.conf
+  sed -i '/^\[display\]/a web-client-max-head-resolution=(4096, 2160)\nmax-head-resolution=(4096, 2160)\nenable-client-resize=true' /etc/dcv/dcv.conf
 fi
 
 # --- Firewall ---

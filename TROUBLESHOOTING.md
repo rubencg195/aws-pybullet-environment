@@ -217,3 +217,161 @@ Or run with `bash scripts/foo.sh`—same behavior.
 ## S3: `BucketNotEmpty` when OpenTofu replaces the sim bucket
 
 Renaming the bucket in code forces replace: destroy old, create new. AWS won’t delete a bucket that still has keys. Empty the old bucket (`aws s3 rm s3://BUCKET/ --recursive`), then re-run `tofu apply -auto-approve`. The config sets **`force_destroy`** on the new bucket so future teardowns are less painful, but the object delete step is still on you during migration.
+
+---
+
+## NVIDIA driver: `nvidia-smi` not found (GPU instance)
+
+**Symptom:** Instance runs on g5/g4dn/g6 and `nvidia-smi` returns "command not found", but CUDA workloads may still work.
+
+**Root cause:** `ubuntu-drivers install --gpgpu` installs the headless driver (`nvidia-headless-XXX-server` + `nvidia-dkms-XXX-server`) which omits `nvidia-utils-XXX-server` — the package containing `nvidia-smi`.
+
+**Fix on a running instance** (pick the version matching your loaded driver, check with `dkms status` or `cat /proc/driver/nvidia/version`):
+
+```bash
+sudo apt install nvidia-utils-590-server   # or whichever series matches
+```
+
+**Fix in the Packer provision script** (`packer/scripts/provision-ubuntu.sh`): after `ubuntu-drivers install --gpgpu`, detect the installed driver series and install the matching utils:
+
+```bash
+NVIDIA_VER="$(dpkg -l 'nvidia-dkms-*-server' 2>/dev/null \
+  | awk '/^ii/{print $2}' | head -1 | grep -oP '\d+' | head -1 || true)"
+if [ -n "${NVIDIA_VER}" ]; then
+  apt-get -y install "nvidia-utils-${NVIDIA_VER}-server" || \
+    apt-get -y install "nvidia-utils-${NVIDIA_VER}"
+fi
+```
+
+The Packer HCL post-reboot sanity check should **not** use `|| echo 'WARN…'` for `nvidia-smi` on known GPU builders — let it fail the build so broken AMIs aren't baked.
+
+---
+
+## NVIDIA driver: full driver vs headless (`--gpgpu`) — what to use
+
+**Use `--gpgpu` (headless).** Do not use `ubuntu-drivers install` (full driver) on EC2 GPU instances with Ubuntu 24.04 + kernel 6.17+.
+
+**What went wrong with the full driver (tested May 2026):**
+
+1. `ubuntu-drivers install` (no `--gpgpu`) installs the full NVIDIA driver which pulls in `nvidia-prime`, `gpu-manager`, and the X11 nvidia DDX driver.
+2. The `nvidia_drm` kernel module fails to load: `nvidia_drm: Unknown symbol drm_fbdev_ttm_driver_fbdev_probe (err -2)` — a kernel 6.17 / driver API mismatch.
+3. Without `nvidia_drm`, `gpu-manager` loops forever looking for `/run/u-d-c-nvidia-drm-was-loaded`, blocking GDM startup entirely.
+4. With `WaylandEnable=false`, GDM tries Xorg with the nvidia driver, which also fails: `Cannot run in framebuffer mode. Please specify busIDs for all framebuffer devices`.
+5. With Wayland enabled, `gpu-manager`/`prime-switch` still blocks GDM before Mutter can start.
+6. Net result: **no desktop at all** — DCV shows "Connecting…" forever.
+
+**How to recover a broken instance** (if you accidentally deployed with the full driver):
+
+```bash
+# Via SSM RunShellScript or SSM session:
+sudo systemctl stop gdm
+sudo systemctl stop dcvserver
+sudo rm -f /etc/X11/xorg.conf
+sudo apt-get -y remove nvidia-prime ubuntu-drivers-common
+sudo apt-get -y autoremove
+sudo touch /run/u-d-c-nvidia-drm-was-loaded
+sudo systemctl start gdm
+sleep 15
+sudo systemctl start dcvserver
+```
+
+Verify: `ps aux | grep gnome-shell` should show Mutter running. `nvidia-smi` still works for CUDA compute.
+
+**Why headless works:** The `--gpgpu` driver provides CUDA/compute support without X11 or nvidia-prime interference. GDM/Mutter starts with Wayland and uses software rendering (llvmpipe) for the desktop compositor, while CUDA/PyBullet physics runs on the GPU. DCV captures the Wayland desktop via its console session.
+
+---
+
+## DCV: desktop resolution stuck at 800x600 (won't scale to browser window)
+
+**Status: known issue, partial mitigation applied, full fix pending.**
+
+**Symptom:** After logging in via DCV web client, the GNOME desktop appears in a small 800x600 box that doesn't stretch to fill the browser window, regardless of browser size.
+
+**Root cause:** On a Wayland session (which is what works on EC2 with the headless NVIDIA driver), DCV's display agent uses `displaylayoutmanagerxrandr` (xrandr) to resize the screen. But Xwayland in rootless mode **does not support xrandr-based resizing**. The Mutter compositor controls the resolution and defaults to 800x600 for a virtual/headless GPU output. DCV correctly receives the client's requested resolution (e.g. 1920x1080) and tells X11 to resize, but the Xwayland framebuffer ignores it and stays at 800x600.
+
+From the DCV agent log (`/var/log/dcv/agent.console.log`):
+
+```
+INFO  display - Received client display layout: size 1920x1080
+INFO  X11:display - Resize screen to size 1920x1080
+INFO  X11:display - Framebuffer reader configured for screen OUTPUT-63 (0,0 800x600 ...)
+INFO  display - Display layout updated: size 800x600
+INFO  display - Ignoring layout request: Layout not changed.
+```
+
+**Partial mitigation (applied in provision script):** The `dcv.conf` `[display]` section is configured with:
+
+```ini
+[display]
+web-client-max-head-resolution=(4096, 2160)
+max-head-resolution=(4096, 2160)
+enable-client-resize=true
+```
+
+This removes the server-side cap (default `web-client-max-head-resolution` was 1920x1080), but does not solve the Xwayland resize limitation.
+
+**Possible approaches still to try:**
+
+- Configure Mutter/GDM to use a higher initial resolution via `monitors.xml` in `/var/lib/gdm3/.config/`
+- Use the Mutter D-Bus API (`org.gnome.Mutter.DisplayConfig`) to change resolution at runtime
+- Use GNOME's experimental `scale-monitor-framebuffer` feature
+- Switch from DCV console session to a DCV virtual session (uses `nice-xdcv` instead of Xwayland)
+
+**Debugging commands** (run via SSM on the instance):
+
+```bash
+# Check what display resolution DCV sees
+sudo dcv describe-session console
+
+# Check DCV agent resize attempts
+grep -i "resize\|layout\|resolution\|head.*size" /var/log/dcv/agent.console.log | tail -20
+
+# Check DCV server layout
+grep -i "layout\|resize" /var/log/dcv/server.log | tail -20
+
+# Check what display processes are running
+ps aux | grep -E "gnome-shell|Xwayland|mutter|Xorg" | grep -v grep
+
+# Check loginctl sessions
+loginctl list-sessions --no-pager
+
+# Check DCV config
+grep -A5 "\[display\]" /etc/dcv/dcv.conf
+```
+
+---
+
+## Rebuilding the AMI from scratch (delete old AMI + instance)
+
+When you need a clean AMI rebuild (e.g. after changing the provision script):
+
+```bash
+# 1. Stop the instance
+./scripts/stop-pybullet-host.sh --wait
+
+# 2. Get current AMI and instance IDs
+cd infrastructure
+AMI_ID="$(tofu output -raw pybullet_golden_ami_id)"
+INSTANCE_ID="$(tofu output -raw pybullet_host_instance_id)"
+REGION="$(tofu output -raw aws_region)"
+
+# 3. Deregister the AMI and delete its snapshots
+SNAP_IDS=$(aws ec2 describe-images --image-ids "$AMI_ID" --region "$REGION" \
+  --query 'Images[0].BlockDeviceMappings[*].Ebs.SnapshotId' --output text --profile personal)
+aws ec2 deregister-image --image-id "$AMI_ID" --region "$REGION" --profile personal
+for snap in $SNAP_IDS; do
+  aws ec2 delete-snapshot --snapshot-id "$snap" --region "$REGION" --profile personal
+done
+
+# 4. Terminate the instance and delete the SSM parameter
+aws ec2 terminate-instances --instance-ids "$INSTANCE_ID" --region "$REGION" --profile personal
+aws ssm delete-parameter --name "/pybullet/aws-pybullet-environment/golden-ami-id" \
+  --region "$REGION" --profile personal
+
+# 5. Remove from tofu state so it rebuilds
+tofu state rm 'null_resource.packer_pybullet_ami[0]'
+tofu state rm 'module.pybullet_host.aws_instance.this'
+
+# 6. Rebuild (runs Packer + creates new instance — takes 30-60+ minutes)
+tofu apply -auto-approve
+```
