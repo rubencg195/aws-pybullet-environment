@@ -43,6 +43,33 @@ For phase history, changelogs, and future work, see **[ROADMAP.md](ROADMAP.md)**
 
 ---
 
+## Benefits and trade-offs
+
+### Why this setup
+
+- **No local GPU required.** Your laptop can be a thin client — a Chromebook or old ThinkPad is enough. All rendering and physics run on a cloud GPU (A10G on g5).
+- **Reproducible environment.** Packer bakes every dependency into a golden AMI: NVIDIA drivers, GNOME, DCV, VS Code, PyBullet venv. No "works on my machine" drift between rebuilds.
+- **Full desktop, not just a terminal.** NICE DCV streams a 1920x1080+ GNOME desktop over TLS. You get drag-and-drop, clipboard, and multi-monitor — not a laggy VNC session.
+- **DCV is free on EC2.** Amazon includes the DCV server license at no extra charge when running on EC2 instances. No per-seat or per-hour licensing fees.
+- **One-command deploy.** `tofu apply -auto-approve` handles everything: network, IAM, AMI build (if needed), EC2 launch. Tear it down just as fast.
+- **Pay only when running.** Stop the instance when you're done for the day. Compute billing stops immediately; only the 80 GB gp3 disk continues to cost (~$6.40/month).
+- **Headless sim pipeline included.** Run simulations, record to GIF, upload to S3 — all without opening a desktop. Useful for batch runs or CI.
+- **Security group auto-locks to your IP.** No broad `0.0.0.0/0` rules — ingress is restricted to the IP that ran the last `tofu apply`.
+- **SSM Session Manager access.** No SSH keys to manage. AWS IAM controls who can connect.
+
+### Trade-offs and limitations
+
+- **GPU instance cost.** g5.xlarge runs ~$1.006/hr on-demand in us-east-1. Leaving it running overnight or over a weekend adds up fast. You need the discipline to stop it.
+- **AMI build time.** A fresh Packer build takes 30–60+ minutes (NVIDIA drivers, desktop packages, DCV). Iterating on the provision script means waiting.
+- **Stored AMI and snapshots cost money at rest.** Each golden AMI snapshot sits in EBS at ~$0.05/GB/month. A single 80 GB snapshot is ~$4/month. If you iterate and forget to deregister old AMIs, these accumulate.
+- **Public IP changes on stop/start.** Unless you attach an Elastic IP ($3.65/month if attached to a running instance, $3.65/month if idle), the public IP rotates every time you stop and start the instance. Scripts handle this, but browser bookmarks break.
+- **Single-user.** DCV console session supports one user at a time. This is a personal workstation, not a shared server.
+- **Region-dependent availability.** g5 instances are not available in every AZ. If your default subnet is in an AZ without g5 capacity, the launch fails — pick a different subnet.
+- **Latency to the desktop.** DCV is responsive over good broadband, but on high-latency or lossy connections (satellite, congested Wi-Fi), the experience degrades. For interactive sliders and real-time 3D, <50 ms RTT to the region is ideal.
+- **AWS account required.** You need an account, credentials, and enough IAM permissions. The setup guide covers it, but there is a bootstrapping step for new accounts.
+
+---
+
 ## What you get
 
 | | |
@@ -569,18 +596,50 @@ Then **`./scripts/run-pybullet-s3-sim-test.sh`** once the instance is **running*
 
 ---
 
-## Cost & idle hosts
+## Cost breakdown
 
-Packer burns a **g5** for tens of minutes and leaves **snapshots/AMIs**—tag **`PyBulletPacker`** helps in Cost Explorer. Prune old AMIs when iterating.
+All prices are **us-east-1 on-demand** as of mid-2026. Spot, Savings Plans, and Reserved Instances can cut compute 40–70% but are not covered here.
 
-Stopping the VM stops **compute**; the **gp3** root disk still bills until you terminate.
+### Per-resource costs
 
-```bash
-./scripts/stop-pybullet-host.sh        # queue stop
-./scripts/stop-pybullet-host.sh --wait # wait for stopped state
-```
+| Resource | Spec | Unit price | Notes |
+|----------|------|-----------|-------|
+| **g5.xlarge** (1 A10G GPU, 4 vCPU, 16 GB RAM) | Compute | **$1.006 / hr** | Billed per-second while **running**. $0 when stopped. |
+| **gp3 root volume** | 80 GB, 3000 IOPS, 125 MB/s | **$0.08 / GB / month** = **~$6.40 / month** | Billed whether the instance is running or stopped. Only deleted on terminate. |
+| **EBS snapshot** (golden AMI) | ~80 GB stored | **$0.05 / GB / month** = **~$4.00 / month** | One snapshot per AMI. Old AMIs accumulate if not pruned. |
+| **S3 sim artifacts** | GIF objects under `sim-runs/` | **$0.023 / GB / month** (Standard) | Tiny at typical usage (a few MB of GIFs). 90-day lifecycle auto-expires. |
+| **S3 requests** | PUT/GET/LIST | **$0.005 per 1K PUTs**, **$0.0004 per 1K GETs** | Negligible for this workload. |
+| **Data transfer out** | DCV stream + S3 downloads | **$0.09 / GB** after first 100 GB/month free | DCV is efficient (~1–5 Mbps); a few hours/day stays well within the free tier. |
+| **NICE DCV license** | Server on EC2 | **$0** | Included at no charge on EC2. |
+| **Elastic IP** (optional) | Stable public IPv4 | **$3.65 / month** (attached, running) | Not provisioned by default. Only needed if you want a fixed IP. |
 
-A later **`tofu apply`** may start the box again if the EC2 definition is meant to stay **running**.
+### Monthly estimates by usage pattern
+
+Assumes the instance is **stopped** outside working hours. Packer rebuilds are rare (1–2/month at most) and amortized across the month.
+
+| Usage pattern | Compute hours/month | Compute cost | Storage (disk + snapshot) | Total/month |
+|---------------|--------------------:|-------------:|--------------------------:|------------:|
+| **Light** — 2 hrs/day, 5 days/week | ~44 hrs | ~$44 | ~$10 | **~$54** |
+| **Moderate** — 4 hrs/day, 5 days/week | ~88 hrs | ~$89 | ~$10 | **~$99** |
+| **Heavy** — 8 hrs/day, 5 days/week | ~176 hrs | ~$177 | ~$10 | **~$187** |
+| **Always-on** (not recommended) | ~730 hrs | ~$734 | ~$10 | **~$744** |
+
+### Packer build cost (one-time per AMI)
+
+Each Packer run spins up a g5.xlarge for ~30–60 minutes, then terminates it. At $1.006/hr, one build costs roughly **$0.50–$1.00** in compute. The resulting AMI snapshot adds ~$4/month until deregistered. Tag **`PyBulletPacker`** helps find old AMIs in Cost Explorer.
+
+### Tips to keep costs down
+
+1. **Stop the instance when you're done.** This is the single biggest lever. Compute is >90% of the bill during active use.
+   ```bash
+   ./scripts/stop-pybullet-host.sh        # queue stop
+   ./scripts/stop-pybullet-host.sh --wait  # wait for stopped state
+   ```
+2. **Deregister old AMIs.** Each Packer rebuild creates a new AMI + snapshot. Prune ones you no longer need.
+3. **Terminate when not using for weeks.** Stopping still bills for the gp3 volume ($6.40/month). Terminating frees it. A later `tofu apply` recreates everything from the golden AMI.
+4. **Consider Spot.** g5.xlarge Spot is often 60–70% cheaper ($0.30–$0.40/hr). Interruptions are rare for interactive work but possible — save frequently.
+5. **Use a smaller instance for non-GPU work.** If you're only editing code or running CPU-only PyBullet (`p.DIRECT`), a `t3.xlarge` at $0.1664/hr works and has no GPU surcharge.
+6. A later **`tofu apply`** may restart the instance if the resource definition expects it **running** — check after applying.
 
 ---
 
