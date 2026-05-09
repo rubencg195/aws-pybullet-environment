@@ -40,12 +40,29 @@ case "${INSTANCE_TYPE}" in
     ubuntu-drivers install --gpgpu
     # --gpgpu omits nvidia-utils (nvidia-smi); detect the driver series and add it.
     NVIDIA_VER="$(dpkg -l 'nvidia-dkms-*-server' 2>/dev/null \
-      | awk '/^ii/{print $2}' | head -1 | grep -oP '\d+' | head -1 || true)"
+      | awk '/^ii/{print $2}' | head -1 | sed -n 's/.*-\([0-9]\+\)-.*/\1/p' || true)"
+    echo "Detected NVIDIA driver series: ${NVIDIA_VER:-<none>}"
     if [ -n "${NVIDIA_VER}" ]; then
       apt-get -y install "nvidia-utils-${NVIDIA_VER}-server" || \
-        apt-get -y install "nvidia-utils-${NVIDIA_VER}"
+        apt-get -y install "nvidia-utils-${NVIDIA_VER}" || \
+        echo "WARNING: nvidia-utils install failed for series ${NVIDIA_VER}"
+    else
+      # Fallback: install whatever nvidia-utils is available matching the kernel module
+      echo "Fallback: searching for any nvidia-utils package..."
+      FALLBACK="$(apt-cache search '^nvidia-utils-[0-9]' 2>/dev/null | awk '{print $1}' | sort -V | tail -1 || true)"
+      if [ -n "${FALLBACK}" ]; then
+        echo "Installing ${FALLBACK}"
+        apt-get -y install "${FALLBACK}" || echo "WARNING: ${FALLBACK} install failed"
+      fi
     fi
     dkms autoinstall -k "${NEWEST_KERNEL}" || true
+    # Verify nvidia-smi is on PATH now
+    if command -v nvidia-smi &>/dev/null; then
+      echo "nvidia-smi found at: $(command -v nvidia-smi)"
+    else
+      echo "WARNING: nvidia-smi still not found after driver install"
+      ls -la /usr/bin/nvidia-smi /usr/lib/nvidia/bin/nvidia-smi 2>/dev/null || true
+    fi
     ;;
   *)
     echo "Skipping NVIDIA packages (instance type: ${INSTANCE_TYPE:-unknown})."

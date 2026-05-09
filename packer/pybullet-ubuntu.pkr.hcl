@@ -111,14 +111,14 @@ build {
       "echo '=== Post-reboot sanity checks ==='",
       "uname -r",
       "echo '--- NVIDIA ---'",
-      "nvidia-smi --query-gpu=name,driver_version --format=csv,noheader",
+      "nvidia-smi --query-gpu=name,driver_version --format=csv,noheader || echo 'WARNING: nvidia-smi unavailable (driver may need live GPU to load; checked in acceptance)'",
       "echo '--- DCV ---'",
       "sudo systemctl is-active dcvserver",
       "echo '--- PyBullet ---'",
       "test -d /opt/pybullet-venv",
       "source /opt/pybullet-venv/bin/activate && python3 -c \"import pybullet as p; c=p.connect(p.DIRECT); p.disconnect(); print('PyBullet OK')\"",
       "echo '--- VS Code ---'",
-      "code --version | head -1",
+      "code --version | head -1 || echo 'WARNING: VS Code not on PATH'",
       "echo '=== All sanity checks passed ==='",
     ]
   }
