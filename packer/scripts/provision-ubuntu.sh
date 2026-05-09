@@ -53,11 +53,55 @@ case "${INSTANCE_TYPE}" in
 esac
 
 # --- Desktop environment ---
-# GDM uses Wayland by default (Mutter compositor). This works on EC2 GPU
-# instances where nvidia_drm may not load; Mutter falls back to software
-# rendering for the desktop while CUDA compute uses the GPU directly.
+# GDM runs in Xorg mode (Wayland disabled) with the xf86-video-dummy driver.
+# The EC2 virtual VGA (simple-framebuffer) is locked at 800x600; the dummy
+# driver provides a 1920x1080 virtual framebuffer so DCV can stream at full
+# resolution. CUDA/PyBullet physics still runs on the NVIDIA GPU.
 apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install ubuntu-desktop-minimal
+apt-get -y install xserver-xorg-video-dummy
 systemctl set-default graphical.target
+
+# Xorg dummy driver config: 1920x1080 virtual framebuffer (256 MB VRAM)
+cat > /etc/X11/xorg.conf << 'XORGEOF'
+Section "Device"
+    Identifier  "DummyDevice"
+    Driver      "dummy"
+    VideoRam    256000
+EndSection
+
+Section "Monitor"
+    Identifier  "DummyMonitor"
+    HorizSync   28.0-80.0
+    VertRefresh 48.0-75.0
+    Modeline "1920x1080_60.00" 173.00 1920 2048 2248 2576 1080 1083 1088 1120 -hsync +vsync
+    Modeline "1600x900_60.00"  118.25 1600 1696 1856 2112  900  903  908  934 -hsync +vsync
+    Modeline "1280x720_60.00"   74.50 1280 1344 1472 1664  720  723  728  748 -hsync +vsync
+EndSection
+
+Section "Screen"
+    Identifier  "DummyScreen"
+    Device      "DummyDevice"
+    Monitor     "DummyMonitor"
+    DefaultDepth 24
+    SubSection "Display"
+        Depth 24
+        Modes "1920x1080_60.00" "1600x900_60.00" "1280x720_60.00"
+        Virtual 1920 1080
+    EndSubSection
+EndSection
+
+Section "ServerLayout"
+    Identifier  "DummyLayout"
+    Screen      "DummyScreen"
+EndSection
+XORGEOF
+
+# Disable Wayland — force GDM to use Xorg so the dummy driver provides the display
+if grep -q '^#WaylandEnable=false' /etc/gdm3/custom.conf; then
+  sed -i 's/^#WaylandEnable=false/WaylandEnable=false/' /etc/gdm3/custom.conf
+elif ! grep -q '^WaylandEnable=false' /etc/gdm3/custom.conf; then
+  sed -i '/^\[daemon\]/a WaylandEnable=false' /etc/gdm3/custom.conf
+fi
 
 # --- Build tools, Python, and utilities ---
 apt-get -y install \

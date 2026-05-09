@@ -14,6 +14,18 @@ For phase history, changelogs, and future work, see **[ROADMAP.md](ROADMAP.md)**
 
 <p align="center"><em>Sample run: checkerboard plane, stock R2-D2 URDF, TinyRenderer → GIF (also uploaded to S3 by <code>run-pybullet-s3-sim-test.sh</code>). File: <code>recordings/r2d2_plane_sim.gif</code>.</em></p>
 
+<p align="center">
+  <img src="images/DCV-connecting.png" alt="DCV web client connecting to the instance" width="560" />
+</p>
+
+<p align="center"><em>DCV web client connecting to the GPU instance over HTTPS on port 8443.</em></p>
+
+<p align="center">
+  <img src="images/DCV-desktop.png" alt="Ubuntu GNOME desktop at 1920x1080 via DCV" width="560" />
+</p>
+
+<p align="center"><em>Full 1920x1080 Ubuntu GNOME desktop streamed via Amazon DCV (Xorg dummy driver).</em></p>
+
 ---
 
 ## What you get

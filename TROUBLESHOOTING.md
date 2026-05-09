@@ -283,57 +283,48 @@ Verify: `ps aux | grep gnome-shell` should show Mutter running. `nvidia-smi` sti
 
 ## DCV: desktop resolution stuck at 800x600 (won't scale to browser window)
 
-**Status: known issue, partial mitigation applied, full fix pending.**
+**Status: RESOLVED — Xorg dummy driver approach.**
 
 **Symptom:** After logging in via DCV web client, the GNOME desktop appears in a small 800x600 box that doesn't stretch to fill the browser window, regardless of browser size.
 
-**Root cause:** On a Wayland session (which is what works on EC2 with the headless NVIDIA driver), DCV's display agent uses `displaylayoutmanagerxrandr` (xrandr) to resize the screen. But Xwayland in rootless mode **does not support xrandr-based resizing**. The Mutter compositor controls the resolution and defaults to 800x600 for a virtual/headless GPU output. DCV correctly receives the client's requested resolution (e.g. 1920x1080) and tells X11 to resize, but the Xwayland framebuffer ignores it and stays at 800x600.
+**Root cause:** The EC2 virtual VGA adapter (Amazon Device 1111) uses the `simple-framebuffer` kernel driver, which is locked to the firmware-set boot resolution of 800x600. Neither Wayland/Mutter nor Xorg's modesetting driver can change it because `simpledrm` doesn't support modesetting. The `bochs-drm` kernel module (which would enable proper modesetting) is not available in the AWS kernel (`6.17.0-1013-aws`).
 
-From the DCV agent log (`/var/log/dcv/agent.console.log`):
+**Solution (applied in provision script):** Install `xserver-xorg-video-dummy` and create `/etc/X11/xorg.conf` with a 1920x1080 virtual framebuffer (256 MB VRAM). Disable Wayland in GDM so Xorg uses the dummy driver instead of the locked simpledrm. DCV then captures and streams the 1920x1080 framebuffer.
 
-```
-INFO  display - Received client display layout: size 1920x1080
-INFO  X11:display - Resize screen to size 1920x1080
-INFO  X11:display - Framebuffer reader configured for screen OUTPUT-63 (0,0 800x600 ...)
-INFO  display - Display layout updated: size 800x600
-INFO  display - Ignoring layout request: Layout not changed.
-```
+Key changes:
+1. `apt-get install xserver-xorg-video-dummy`
+2. Create `/etc/X11/xorg.conf` with dummy driver at 1920x1080
+3. Set `WaylandEnable=false` in `/etc/gdm3/custom.conf`
+4. DCV `[display]` settings in `dcv.conf` for client resize support
 
-**Partial mitigation (applied in provision script):** The `dcv.conf` `[display]` section is configured with:
-
-```ini
-[display]
-web-client-max-head-resolution=(4096, 2160)
-max-head-resolution=(4096, 2160)
-enable-client-resize=true
+Verify on a running instance:
+```bash
+grep -i layout /var/log/dcv/server.log | tail -3
+# Should show: size 1920x1080
 ```
 
-This removes the server-side cap (default `web-client-max-head-resolution` was 1920x1080), but does not solve the Xwayland resize limitation.
+**Approaches that did NOT work:**
 
-**Possible approaches still to try:**
-
-- Configure Mutter/GDM to use a higher initial resolution via `monitors.xml` in `/var/lib/gdm3/.config/`
-- Use the Mutter D-Bus API (`org.gnome.Mutter.DisplayConfig`) to change resolution at runtime
-- Use GNOME's experimental `scale-monitor-framebuffer` feature
-- Switch from DCV console session to a DCV virtual session (uses `nice-xdcv` instead of Xwayland)
+- **Mutter D-Bus API** (`ApplyMonitorsConfig`): D-Bus call returns success but `simpledrm` can't actually change the hardware resolution, so it stays at 800x600.
+- **monitors.xml** (for GDM and user): Same issue — Mutter reads the config but the DRM backend can't apply the mode.
+- **DCV virtual sessions** (`--type virtual`): `dcvagent` segfaults in `libX11-xcb.so` / `libxcb.so` on Ubuntu 24.04 with DCV 2025.0. The virtual session starts but crashes within ~2 seconds.
+- **bochs-drm kernel module**: Not available in the AWS kernel.
+- **Full NVIDIA driver** (non-headless): `nvidia_drm` has kernel compatibility issues on 6.17; `gpu-manager` loops and blocks GDM startup.
 
 **Debugging commands** (run via SSM on the instance):
 
 ```bash
 # Check what display resolution DCV sees
-sudo dcv describe-session console
+grep -i layout /var/log/dcv/server.log | tail -5
+
+# Check Xorg is using the dummy driver
+grep -i dummy /var/log/Xorg.0.log | head -5
 
 # Check DCV agent resize attempts
-grep -i "resize\|layout\|resolution\|head.*size" /var/log/dcv/agent.console.log | tail -20
+grep -i "resize\|layout" /var/log/dcv/agent.ubuntu.console.log | tail -10
 
-# Check DCV server layout
-grep -i "layout\|resize" /var/log/dcv/server.log | tail -20
-
-# Check what display processes are running
-ps aux | grep -E "gnome-shell|Xwayland|mutter|Xorg" | grep -v grep
-
-# Check loginctl sessions
-loginctl list-sessions --no-pager
+# Check for segfaults (virtual session debugging)
+dmesg | grep -i segfault | tail -10
 
 # Check DCV config
 grep -A5 "\[display\]" /etc/dcv/dcv.conf
