@@ -8,11 +8,20 @@ For phase history, changelogs, and future work, see **[ROADMAP.md](ROADMAP.md)**
 
 ## Recordings gallery
 
-<p align="center">
-  <img src="recordings/r2d2_plane_sim.gif" alt="Headless R2-D2 plane simulation (animated GIF)" width="560" />
-</p>
-
-<p align="center"><em>Sample run: checkerboard plane, stock R2-D2 URDF, TinyRenderer → GIF (also uploaded to S3 by <code>run-pybullet-s3-sim-test.sh</code>). File: <code>recordings/r2d2_plane_sim.gif</code>.</em></p>
+<table>
+<tr>
+<td align="center"><strong>Headless R2-D2 sim (SSM → S3)</strong></td>
+<td align="center"><strong>Interactive Kuka arm (DCV desktop)</strong></td>
+</tr>
+<tr>
+<td align="center"><img src="recordings/r2d2_plane_sim.gif" alt="R2-D2 plane sim" width="380" /></td>
+<td align="center"><img src="recordings/kuka_session.gif" alt="Kuka arm with joint sliders" width="380" /></td>
+</tr>
+<tr>
+<td align="center"><em><code>run-pybullet-s3-sim-test.sh</code></em></td>
+<td align="center"><em><code>interactive_robot_arm.py --record</code></em></td>
+</tr>
+</table>
 
 <p align="center">
   <img src="images/DCV-connecting.png" alt="DCV web client connecting to the instance" width="560" />
@@ -25,6 +34,12 @@ For phase history, changelogs, and future work, see **[ROADMAP.md](ROADMAP.md)**
 </p>
 
 <p align="center"><em>Full 1920x1080 Ubuntu GNOME desktop streamed via Amazon DCV (Xorg dummy driver).</em></p>
+
+<p align="center">
+  <img src="images/DCV-simulation.png" alt="Kuka arm interactive session on the DCV desktop" width="560" />
+</p>
+
+<p align="center"><em>Interactive Kuka arm session running on the DCV desktop with joint sliders and live FPS.</em></p>
 
 ---
 
@@ -455,6 +470,62 @@ STRICT_ACCEPTANCE_GPU=1 bash /path/to/on-instance-checks.sh
 
 ---
 
+### `scripts/interactive_robot_arm.py`
+
+**Run on the DCV desktop** (needs a display — not headless). Loads the **Kuka iiwa 7-DOF** robot arm from `pybullet_data`, creates one slider per revolute joint (labelled in degrees), and lets you pose the arm in real time. Optionally records the session to a GIF and uploads it to S3.
+
+**Flags:**
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| *(none)* | | Interactive-only — no recording |
+| **`--record FILE`** | | Capture the GUI viewport to an animated GIF on exit |
+| **`--fps N`** | **`15`** | GIF frame rate (frames per second) |
+| **`--width N`** | **`800`** | Capture width in pixels |
+| **`--height N`** | **`600`** | Capture height in pixels |
+| **`--s3-bucket BUCKET`** | | Upload the GIF to this S3 bucket after saving locally |
+| **`--s3-prefix PREFIX`** | **`sim-runs`** | S3 key prefix (`<prefix>/<utc-timestamp>/<filename>`) |
+| **`-h`**, **`--help`** | | Usage summary |
+
+**Requirements (on the instance):**
+
+- A display (run inside the DCV desktop session, not over bare SSM).
+- `/opt/pybullet-venv` activated (`source /opt/pybullet-venv/bin/activate`).
+- For recording: `numpy` and `Pillow` (already in the venv).
+- For S3 upload: `boto3` (already in the venv) and instance role with `s3:PutObject`.
+
+**Examples:**
+
+```bash
+source /opt/pybullet-venv/bin/activate
+
+# Interactive only — drag sliders, see FPS in terminal
+python3 interactive_robot_arm.py
+
+# Record the session to a local GIF
+python3 interactive_robot_arm.py --record kuka_session.gif
+
+# Record at higher resolution and frame rate
+python3 interactive_robot_arm.py --record kuka_session.gif --fps 20 --width 1024 --height 768
+
+# Record + upload to the project S3 bucket
+python3 interactive_robot_arm.py \
+  --record kuka_session.gif \
+  --fps 20 \
+  --width 1024 \
+  --height 768 \
+  --s3-bucket pyb-sim-us-east-1-176843580427 \
+  --s3-prefix sim-runs
+
+# Then from your workstation, download the recording:
+./scripts/download-pybullet-sim-recording.sh \
+  's3://pyb-sim-us-east-1-176843580427/sim-runs/<timestamp>/kuka_session.gif'
+```
+
+**Stopping:** Press **Ctrl-C** or close the GUI window. The GIF is encoded and uploaded (if flags were set) after the loop exits — both exit methods trigger save/upload.
+
+---
+
 ### **`scripts/lib/ec2-host-precheck.sh`** (library)
 
 Not a runnable entrypoint. **`source`**‘d by **`run-acceptance.sh`**, **`run-pybullet-s3-sim-test.sh`**, and **`start-pybullet-host.sh`**. Start/stop/instance-id validation lives here. When the instance is **already running**, **`ec2_host_precheck`** returns success **immediately** (no long polling loop), which avoids rare **`describe-instances`** flakes that could time out even though the instance never left **`running`**.
@@ -536,7 +607,7 @@ Ingress to **22**/**8443** is tied to **`tofu apply`**’s view of your public I
 ```
 aws-pybullet-environment/
 ├── README.md
-├── recordings/                     # Sample GIF tracked; other *.gif usually gitignored
+├── recordings/                     # Sample GIFs tracked; other *.gif usually gitignored
 ├── SETUP.md
 ├── TROUBLESHOOTING.md
 ├── ROADMAP.md
@@ -548,6 +619,7 @@ aws-pybullet-environment/
 │   ├── stop-pybullet-host.sh
 │   ├── list-pybullet-sim-recordings.sh
 │   ├── download-pybullet-sim-recording.sh
+│   ├── interactive_robot_arm.py    # GUI: Kuka arm + sliders + optional GIF/S3
 │   ├── pybullet_deep_test/run_sim_and_upload.py
 │   └── acceptance/on-instance-checks.sh
 ├── infrastructure/                 # OpenTofu root (+ modules/ec2-instance)

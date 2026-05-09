@@ -48,3 +48,4 @@ terraform.rc
 # PyBullet sim recordings: ignore ad-hoc downloads; keep one sample for the README gallery.
 recordings/*.gif
 !recordings/r2d2_plane_sim.gif
+!recordings/kuka_session.gif

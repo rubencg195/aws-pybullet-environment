@@ -122,8 +122,9 @@ Migrated from Amazon Linux 2023 to Ubuntu 24.04 LTS. Full pipeline verified end-
 | 4.7 | README gallery + docs sync | DONE | Sample GIF linked at top of README; scripts list/download documented |
 | 4.8 | Deterministic sim bucket name | DONE | `pyb-sim-<region>-<account-id>`; migration + empty-old-bucket note in TROUBLESHOOTING |
 | 4.9 | Stop-host helper script | DONE | `scripts/stop-pybullet-host.sh` |
+| 4.10 | Interactive Kuka arm script | DONE | `scripts/interactive_robot_arm.py` — GUI sliders for 7-DOF joints, live FPS, `--record` to GIF, `--s3-bucket` upload |
 
-**Done (summary):** S3 + IAM, SSM runner, headless PyBullet + boto3, invalid `pybullet_data` pip removed; sim tuning so the droid’s base motion reads on camera; workstation helpers list and fetch objects into `recordings/`.
+**Done (summary):** S3 + IAM, SSM runner, headless PyBullet + boto3, invalid `pybullet_data` pip removed; sim tuning so the droid’s base motion reads on camera; workstation helpers list and fetch objects into `recordings/`. Interactive GUI script for the Kuka arm with per-joint sliders, optional GIF recording, and S3 upload.
 
 ### Sim / S3 implementation detail
 
@@ -336,6 +337,7 @@ flowchart TB
 - `scripts/run-pybullet-s3-sim-test.sh` — SSM Run Command → GIF upload
 - `scripts/pybullet_deep_test/run_sim_and_upload.py` — on-instance headless PyBullet + boto3
 - `infrastructure/s3_pybullet_sim.tf` — sim artifacts bucket + EC2 PutObject policy
+- `scripts/interactive_robot_arm.py` — GUI Kuka arm sim with joint sliders and optional GIF recording + S3 upload
 - `scripts/acceptance/on-instance-checks.sh` — on-instance checks (invoked by runner)
 - `infrastructure/modules/ec2-instance/sg.tf` — security group rules
 

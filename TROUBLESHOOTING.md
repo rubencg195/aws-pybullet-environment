@@ -212,6 +212,34 @@ Rare: Packer prints progress, creates an AMI, then the parent `tofu`/`packer` pr
 
 ---
 
+## `interactive_robot_arm.py`: "Could not open the PyBullet GUI"
+
+The script needs an X11 display. Run it inside the DCV desktop session, not from a bare SSM terminal. Make sure DCV is working and you're logged into the GNOME desktop first.
+
+```bash
+# On the DCV desktop terminal:
+source /opt/pybullet-venv/bin/activate
+python3 interactive_robot_arm.py
+```
+
+If you get this error over SSH with X-forwarding, the forwarded display might not support OpenGL. Use DCV instead.
+
+---
+
+## `interactive_robot_arm.py`: recording saved but S3 upload failed
+
+Check that `boto3` is installed in the venv (`pip list | grep boto3`) and that the instance role has `s3:PutObject` on the target bucket prefix. The bucket name should match what OpenTofu deployed (`cd infrastructure && tofu output -raw pybullet_sim_artifacts_bucket`).
+
+If you closed the GUI window and the script crashed before uploading, try again with Ctrl-C (graceful stop) instead of clicking the X button, though both methods should work.
+
+---
+
+## `interactive_robot_arm.py`: no frames captured / GIF is empty
+
+The session was too short (closed immediately). Keep the window open for at least a few seconds so the script captures frames at the configured FPS rate before stopping.
+
+---
+
 ## `./scripts/…`: Permission denied
 
 The repo expects workstation scripts to be executable. Some filesystems or archive steps strip the bit. Fix once:
