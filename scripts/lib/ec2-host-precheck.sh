@@ -76,10 +76,15 @@ ec2_host_precheck() {
     state="pending"
   fi
 
-  if [[ "${state}" == "pending" ]] || [[ "${state}" == "running" ]]; then
-    if [[ "${state}" != "running" ]]; then
-      echo "EC2: waiting for ${iid} to reach running (max ${max_wait}s)..."
-    fi
+  # Already running: return immediately. Avoids a polling loop where a flaky describe could
+  # empty state and time out even though the instance never left running.
+  if [[ "${state}" == "running" ]]; then
+    echo "EC2: ${iid} already running (Name=${name:-unknown})"
+    return 0
+  fi
+
+  if [[ "${state}" == "pending" ]]; then
+    echo "EC2: waiting for ${iid} to reach running (max ${max_wait}s)..."
     waited=0
     while [[ "${waited}" -lt "${max_wait}" ]]; do
       line="$(_ec2_describe)" || true

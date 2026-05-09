@@ -20,7 +20,7 @@ for arg in "$@"; do
       echo "Usage: $0 [--wait-ssm] [--json]"
       echo "  Start stopped PyBullet host (from tofu outputs), wait running, print login info."
       echo "  --wait-ssm  Wait until SSM agent is Online (useful before run-acceptance / sim scripts)."
-      echo "  --json      Machine-readable output (dcv_url, public_ip, instance_id, region, ...)."
+      echo "  --json      Machine-readable JSON (warn field if no public IPv4)."
       echo ""
       echo "Env: AWS_PROFILE (default personal), EC2_START_WAIT_MAX_SEC (default 600)"
       exit 0
@@ -52,12 +52,15 @@ PUBLIC_IP="$("${AWS[@]}" ec2 describe-instances \
   --query 'Reservations[0].Instances[0].PublicIpAddress' \
   --output text 2>/dev/null || true)"
 
-if [[ -z "${PUBLIC_IP}" || "${PUBLIC_IP}" == "None" ]]; then
-  echo "EC2: no PublicIpAddress yet for ${INSTANCE_ID} (subnet / associate_public_ip?)." >&2
-  exit 1
+DCV_URL=""
+DCV_NOTE=""
+if [[ -n "${PUBLIC_IP}" && "${PUBLIC_IP}" != "None" ]]; then
+  DCV_URL="https://${PUBLIC_IP}:8443"
+else
+  PUBLIC_IP=""
+  DCV_NOTE=$'No public IPv4 on this instance yet (subnet / associate_public_ip / boot timing).\nDCV URL unknown — use SSM below; retry describe-instances or tofu refresh after a minute.'
+  echo "WARN: ${DCV_NOTE}" >&2
 fi
-
-DCV_URL="https://${PUBLIC_IP}:8443"
 
 if [[ "${WAIT_SSM}" -eq 1 ]]; then
   echo "Waiting for SSM agent (up to ~3 min)..."
@@ -78,10 +81,15 @@ if [[ "${WAIT_SSM}" -eq 1 ]]; then
   done
 fi
 
+DCV_URL_LINE="${DCV_URL}"
+HOST_LINE="${PUBLIC_IP}"
+[[ -z "${DCV_URL}" ]] && DCV_URL_LINE="(none — no public IPv4 yet; use SSM or retry after association)"
+[[ -z "${PUBLIC_IP}" ]] && HOST_LINE="n/a"
+
 if [[ "${JSON_OUT}" -eq 1 ]]; then
   python3 -c "
 import json
-print(json.dumps({
+o = {
   'instance_id': '${INSTANCE_ID}',
   'region': '${REGION}',
   'public_ip': '${PUBLIC_IP}',
@@ -90,7 +98,10 @@ print(json.dumps({
   'username': 'ubuntu',
   'password_note': 'Set on instance: sudo passwd ubuntu (via SSM)',
   'aws_profile': '${PROFILE}',
-}))
+}
+if not o['public_ip']:
+  o['warn'] = 'no public IPv4 on instance (subnet / timing); use SSM'
+print(json.dumps(o))
 "
   exit 0
 fi
@@ -100,12 +111,12 @@ cat <<EOF
 === PyBullet host is running ===
 
 DCV (web browser):
-  URL:      ${DCV_URL}
+  URL:      ${DCV_URL_LINE}
   Username: ubuntu
   Password: whatever you set with: sudo passwd ubuntu (over SSM, see below)
 
 DCV (native client):
-  Host: ${PUBLIC_IP}
+  Host: ${HOST_LINE}
   Port: 8443
   User: ubuntu
 
@@ -115,6 +126,6 @@ SSM (set password or debug):
     --region ${REGION} \\
     --profile ${PROFILE}
 
-Public IP: ${PUBLIC_IP}  (from EC2 API — if tofu output differs, run: cd infrastructure && tofu refresh)
+Public IP: ${HOST_LINE}  (from EC2 API — if tofu output differs, run: cd infrastructure && tofu refresh)
 
 EOF

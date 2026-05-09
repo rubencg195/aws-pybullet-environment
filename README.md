@@ -360,15 +360,19 @@ For **`--help`**, **`download-pybullet-sim-recording.sh`** prints usage and exit
 
 ### `scripts/start-pybullet-host.sh`
 
-Starts the PyBullet EC2 host if it is **stopped** (via **`scripts/lib/ec2-host-precheck.sh`**), waits until **running**, then prints **DCV** and **SSM** login information. **Public IP** comes from **`aws ec2 describe-instances`** so it stays correct after stop/start (**`tofu output pybullet_host_public_ip`** can lag until **`tofu refresh`**).
+Uses OpenTofu outputs (**`pybullet_host_instance_id`**, **`aws_region`**) and **`scripts/lib/ec2-host-precheck.sh`** to ensure the host reaches **`running`**: starts it if **stopped**, waits if **pending**, and if it is **already running** prints **`EC2: … already running`** and continues (**no error**—useful for idempotent “show me how to connect” runs).
+
+After that, it reads **live** **`PublicIpAddress`** from **`aws ec2 describe-instances`** (correct after stop/start; **`tofu output pybullet_host_public_ip`** may lag until **`tofu refresh`**).
+
+**If there is no public IPv4** (subnet, **`associate_public_ip`**, or boot timing): it prints **`WARN:`** on stderr, leaves **DCV** lines as placeholders (**`(none — no public IPv4 yet; …)`** / **`n/a`** for host), and still prints the **SSM** command so you can fix or debug the box. With **`--json`**, **`public_ip`** and **`dcv_url`** are empty strings and a **`warn`** field is added.
 
 **Flags:**
 
 | Flag | Meaning |
 |------|---------|
 | *(none)* | Start if needed, wait running, print human-readable login block |
-| **`--wait-ssm`** | After that, poll until SSM reports **Online** (about **3 minutes** max; useful before **`run-acceptance.sh`** / sim scripts) |
-| **`--json`** | One JSON object: **`dcv_url`**, **`public_ip`**, **`instance_id`**, **`region`**, **`username`**, **`dcv_port`**, **`password_note`**, **`aws_profile`** |
+| **`--wait-ssm`** | After that, poll until SSM reports **Online** (about **3 minutes** max; useful before **`run-acceptance.sh`** / sim scripts). If still not online, prints **`WARN:`** but exits **0**. |
+| **`--json`** | One JSON object: **`instance_id`**, **`region`**, **`public_ip`**, **`dcv_url`**, **`dcv_port`**, **`username`**, **`password_note`**, **`aws_profile`**, and **`warn`** (only when there is no public IPv4) |
 | **`-h`**, **`--help`** | Usage |
 
 **Environment:**
@@ -441,7 +445,7 @@ STRICT_ACCEPTANCE_GPU=1 bash /path/to/on-instance-checks.sh
 
 ### **`scripts/lib/ec2-host-precheck.sh`** (library)
 
-Not a runnable entrypoint. **`source`**‘d by **`run-acceptance.sh`** and **`run-pybullet-s3-sim-test.sh`**. Start/stop/instance-id validation lives here.
+Not a runnable entrypoint. **`source`**‘d by **`run-acceptance.sh`**, **`run-pybullet-s3-sim-test.sh`**, and **`start-pybullet-host.sh`**. Start/stop/instance-id validation lives here. When the instance is **already running**, **`ec2_host_precheck`** returns success **immediately** (no long polling loop), which avoids rare **`describe-instances`** flakes that could time out even though the instance never left **`running`**.
 
 ---
 
