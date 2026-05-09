@@ -153,8 +153,7 @@ On the machine that runs **`tofu`**:
 | **OpenTofu** **`tofu`** | On **`PATH`** |
 | **Packer** | On **`PATH`** for OpenTofu’s Packer **`local-exec`** (same shell as **`tofu apply`)** — see **[SETUP.md](SETUP.md)** |
 | **Python 3** | Used when publishing AMI id to SSM |
-
-**Optional — NICE DCV on your machine:** Connecting with a **web browser** to **`https://<public-ip>:8443`** does **not** require installing DCV locally. For the **native DCV viewer** on Windows, macOS, or Linux, use the installers linked from **[NICE DCV on AWS](https://aws.amazon.com/hpc/dcv/)**. If you maintain a Linux workstation (or want the full package stack used on EC2), Linux packaging and prerequisites are documented in **[Installing the NICE DCV server on Linux](https://docs.aws.amazon.com/dcv/latest/adminguide/setting-up-installing-linux-server.html)** *(admin guide: server-side install; laptops usually install only the **viewer client**).* 
+| **NICE DCV client** | **Web browser** works out of the box (`https://<public-ip>:8443`). For better performance install the **[native DCV viewer](https://aws.amazon.com/hpc/dcv/)** (Windows, macOS, Linux). |
 
 In AWS:
 
