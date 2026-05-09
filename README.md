@@ -152,6 +152,8 @@ From **`infrastructure/`** (anywhere below, run **`cd infrastructure`** first or
 | **`pybullet_host_dcv_url`** | **`https://<that-ip>:8443`** — use this in a browser as the DCV endpoint |
 | **`pybullet_host_instance_id`** | Needed for **`aws ssm start-session`** |
 
+If the instance was **stopped**, from the **repository root** you can start it and print **current** DCV / SSM login hints (live **`PublicIpAddress`**, not only stale tofu output): **`./scripts/start-pybullet-host.sh`** — see **`scripts/start-pybullet-host.sh`** under [Scripts](#scripts-flags-environment-variables-examples).
+
 ```bash
 cd infrastructure
 tofu output -raw pybullet_host_public_ip
@@ -356,6 +358,38 @@ For **`--help`**, **`download-pybullet-sim-recording.sh`** prints usage and exit
 
 ---
 
+### `scripts/start-pybullet-host.sh`
+
+Starts the PyBullet EC2 host if it is **stopped** (via **`scripts/lib/ec2-host-precheck.sh`**), waits until **running**, then prints **DCV** and **SSM** login information. **Public IP** comes from **`aws ec2 describe-instances`** so it stays correct after stop/start (**`tofu output pybullet_host_public_ip`** can lag until **`tofu refresh`**).
+
+**Flags:**
+
+| Flag | Meaning |
+|------|---------|
+| *(none)* | Start if needed, wait running, print human-readable login block |
+| **`--wait-ssm`** | After that, poll until SSM reports **Online** (about **3 minutes** max; useful before **`run-acceptance.sh`** / sim scripts) |
+| **`--json`** | One JSON object: **`dcv_url`**, **`public_ip`**, **`instance_id`**, **`region`**, **`username`**, **`dcv_port`**, **`password_note`**, **`aws_profile`** |
+| **`-h`**, **`--help`** | Usage |
+
+**Environment:**
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| **`AWS_PROFILE`** | **`personal`** | AWS CLI profile |
+| **`EC2_START_WAIT_MAX_SEC`** | **`600`** | Max seconds to wait after a stopped instance is started |
+
+**Examples:**
+
+```bash
+./scripts/start-pybullet-host.sh
+./scripts/start-pybullet-host.sh --wait-ssm
+./scripts/start-pybullet-host.sh --wait-ssm --json
+AWS_PROFILE=work ./scripts/start-pybullet-host.sh --json
+./scripts/start-pybullet-host.sh --help
+```
+
+---
+
 ### `scripts/stop-pybullet-host.sh`
 
 Calls **`aws ec2 stop-instances`** for **`pybullet_host_instance_id`** in **`aws_region`**. Refuses instances whose **Name** tag matches **`*packer-builder*`**.
@@ -494,6 +528,7 @@ aws-pybullet-environment/
 │   ├── lib/ec2-host-precheck.sh
 │   ├── run-acceptance.sh
 │   ├── run-pybullet-s3-sim-test.sh
+│   ├── start-pybullet-host.sh
 │   ├── stop-pybullet-host.sh
 │   ├── list-pybullet-sim-recordings.sh
 │   ├── download-pybullet-sim-recording.sh
